@@ -1,0 +1,36 @@
+# Run 1: YOLO11m Baseline — Replicate V3 with proper config
+# ADR-007 Plan experimental row 1
+type: yolo
+
+name: run1_yolo11m_baseline
+seed: 42
+model: yolo11m.pt
+data_yaml: data/v1/yolo/data.yaml
+epochs: 200
+patience: 30
+imgsz: 640
+batch: 16
+optimizer: SGD
+lr0: 0.01
+lrf: 0.01
+cos_lr: true
+warmup_epochs: 3
+
+# Augmentation (conservative)
+hsv_h: 0.015
+hsv_s: 0.6
+hsv_v: 0.4
+degrees: 7.0
+translate: 0.1
+scale: 0.5
+fliplr: 0.0     # v1 dataset — no flip (OCR compatibility)
+flipud: 0.0     # NEVER > 0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.0      # baseline — no mixup
+cutmix: 0.0
+cls_pw: 1.0     # default class weight
+
+save_json: true
+deterministic: true
+project: experiments

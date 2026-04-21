@@ -1,0 +1,17 @@
+# Run 4: RF-DETR-M Baseline — ADR-007 row 4
+type: rfdetr
+
+name: run4_rfdetr_baseline
+seed: 42
+dataset_dir: data/v1/coco
+epochs: 80
+batch_size: 4
+grad_accum_steps: 4    # effective batch = 16
+lr: 5.0e-5
+lr_encoder: 1.5e-4
+resolution: 672         # multiple of 56 (RF-DETR requirement)
+use_ema: true
+early_stopping: true
+early_stopping_patience: 15
+weight_decay: 1.0e-4
+project: experiments

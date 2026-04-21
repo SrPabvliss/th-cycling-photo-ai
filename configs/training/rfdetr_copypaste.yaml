@@ -1,0 +1,17 @@
+# Run 5: RF-DETR-M + Copy-Paste — ADR-007 row 5
+type: rfdetr
+
+name: run5_rfdetr_copypaste
+seed: 42
+dataset_dir: data/v1_copypaste/coco  # augmented dataset
+epochs: 80
+batch_size: 4
+grad_accum_steps: 4
+lr: 5.0e-5
+lr_encoder: 1.5e-4
+resolution: 672
+use_ema: true
+early_stopping: true
+early_stopping_patience: 15
+weight_decay: 1.0e-4
+project: experiments

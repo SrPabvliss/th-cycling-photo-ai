@@ -1,0 +1,35 @@
+# Run 3: YOLO11m + Copy-Paste — ADR-007 row 3
+# Requires running copy-paste augmentation script BEFORE training
+type: yolo
+
+name: run3_yolo11m_copypaste
+seed: 42
+model: yolo11m.pt
+data_yaml: data/v1_copypaste/yolo/data.yaml  # augmented dataset
+epochs: 200
+patience: 30
+imgsz: 640
+batch: 16
+optimizer: SGD
+lr0: 0.01
+lrf: 0.01
+cos_lr: true
+warmup_epochs: 3
+
+hsv_h: 0.015
+hsv_s: 0.6
+hsv_v: 0.4
+degrees: 7.0
+translate: 0.1
+scale: 0.5
+fliplr: 0.0
+flipud: 0.0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.1
+cutmix: 0.1
+cls_pw: 0.5
+
+save_json: true
+deterministic: true
+project: experiments

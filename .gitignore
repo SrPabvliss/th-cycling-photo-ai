@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Data (downloaded datasets — large, re-downloadable)
+data/
+!data/.gitkeep
+
+# Weights (trained models — large binaries)
+weights/
+!weights/.gitkeep
+
+# Experiment outputs (training logs, checkpoints)
+experiments/*/
+!experiments/.gitkeep
+!experiments/README.md
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Environment
+.env
+.env.*
+!.env.example

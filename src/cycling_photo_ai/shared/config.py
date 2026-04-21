@@ -1,0 +1,138 @@
+"""Configuration loading and validation.
+
+Equivalent to backend's ConfigService — loads YAML configs,
+validates with Pydantic, fails fast on missing required values.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import yaml
+from pydantic import BaseModel, Field
+
+
+# ---------------------------------------------------------------------------
+# Training configs
+# ---------------------------------------------------------------------------
+
+
+class YoloTrainingConfig(BaseModel):
+    """Configuration for a single YOLO11m training run."""
+
+    name: str = Field(description="Run identifier, e.g. 'yolo11m_baseline'")
+    seed: int = 42
+    model: str = "yolo11m.pt"
+    data_yaml: str = Field(description="Path to data.yaml relative to dataset root")
+    epochs: int = 200
+    patience: int = 30
+    imgsz: int = 640
+    batch: int = 16
+    optimizer: str = "SGD"
+    lr0: float = 0.01
+    lrf: float = 0.01
+    cos_lr: bool = True
+    warmup_epochs: int = 3
+    hsv_h: float = 0.015
+    hsv_s: float = 0.6
+    hsv_v: float = 0.4
+    degrees: float = 7.0
+    translate: float = 0.1
+    scale: float = 0.5
+    fliplr: float = 0.0
+    flipud: float = 0.0
+    mosaic: float = 1.0
+    close_mosaic: int = 10
+    mixup: float = 0.0
+    cutmix: float = 0.0
+    cls_pw: float = 1.0
+    save_json: bool = True
+    deterministic: bool = True
+    project: str = "experiments"
+
+
+class RfdetrTrainingConfig(BaseModel):
+    """Configuration for a single RF-DETR-M training run."""
+
+    name: str = Field(description="Run identifier, e.g. 'rfdetr_baseline'")
+    seed: int = 42
+    dataset_dir: str = Field(description="Path to COCO-format dataset directory")
+    epochs: int = 80
+    batch_size: int = 4
+    grad_accum_steps: int = 4
+    lr: float = 5e-5
+    lr_encoder: float = 1.5e-4
+    resolution: int = 672
+    use_ema: bool = True
+    early_stopping: bool = True
+    early_stopping_patience: int = 15
+    weight_decay: float = 1e-4
+    project: str = "experiments"
+
+
+# ---------------------------------------------------------------------------
+# Evaluation config
+# ---------------------------------------------------------------------------
+
+
+class EvaluationConfig(BaseModel):
+    """Configuration for the 12-step evaluation protocol."""
+
+    test_annotations: str = Field(description="Path to COCO ground-truth JSON")
+    confidence_threshold: float = 0.25
+    iou_threshold: float = 0.5
+    bootstrap_iterations: int = 10_000
+    seeds: list[int] = Field(default=[42, 123, 2024, 7, 1337])
+    alpha: float = 0.05
+
+
+# ---------------------------------------------------------------------------
+# Inference config
+# ---------------------------------------------------------------------------
+
+
+class InferenceConfig(BaseModel):
+    """Configuration for the FastAPI inference microservice."""
+
+    host: str = "0.0.0.0"
+    port: int = 8001
+    active_model: str | None = None
+    yolo_weights: str | None = None
+    rfdetr_weights: str | None = None
+    confidence_threshold: float = 0.25
+
+
+# ---------------------------------------------------------------------------
+# Loader
+# ---------------------------------------------------------------------------
+
+CONFIG_TYPES: dict[str, type[BaseModel]] = {
+    "yolo": YoloTrainingConfig,
+    "rfdetr": RfdetrTrainingConfig,
+    "evaluation": EvaluationConfig,
+    "inference": InferenceConfig,
+}
+
+
+def load_config(path: str | Path) -> BaseModel:
+    """Load and validate a YAML config file.
+
+    The YAML must contain a top-level `type` key matching a registered config type.
+
+    Raises:
+        FileNotFoundError: Config file does not exist.
+        ValueError: Unknown config type or validation failure.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"Config not found: {path}")
+
+    with open(path) as f:
+        raw: dict[str, Any] = yaml.safe_load(f)
+
+    config_type = raw.pop("type", None)
+    if config_type not in CONFIG_TYPES:
+        raise ValueError(f"Unknown config type '{config_type}'. Expected: {list(CONFIG_TYPES)}")
+
+    return CONFIG_TYPES[config_type](**raw)

@@ -1,0 +1,35 @@
+# Run 2: YOLO11m Optimized — ADR-007 row 2
+type: yolo
+
+name: run2_yolo11m_optimized
+seed: 42
+model: yolo11m.pt
+data_yaml: data/v1/yolo/data.yaml
+epochs: 200
+patience: 30
+imgsz: 640
+batch: 16
+optimizer: SGD
+lr0: 0.01
+lrf: 0.01
+cos_lr: true
+warmup_epochs: 3
+
+# Augmentation (enhanced)
+hsv_h: 0.015
+hsv_s: 0.6
+hsv_v: 0.4
+degrees: 7.0
+translate: 0.1
+scale: 0.5
+fliplr: 0.0
+flipud: 0.0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.1      # NEW: mixup enabled
+cutmix: 0.1
+cls_pw: 0.5     # NEW: reduced class weight for competidor_number boost
+
+save_json: true
+deterministic: true
+project: experiments
