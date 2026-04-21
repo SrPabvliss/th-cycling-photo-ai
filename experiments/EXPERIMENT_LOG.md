@@ -226,3 +226,14 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | 2026-04-21 | Modal > Colab para training | A10G más rápido, --detach evita cortes, volume persiste datos |
 | 2026-04-21 | RF-DETR resolution custom no funciona | Pretrained weights incompatibles con resolution≠default, usar default (576) |
 | 2026-04-21 | **RF-DETR-M = modelo producción** | mAP@0.5=0.954 > YOLO 0.904 (+5pp), Apache 2.0, supera targets |
+| 2026-04-21 | Copy-paste no mejora RF-DETR | Run 5 (CP) mAP=0.946 < Run 4 (sin CP) 0.954. Crops artificiales confunden transformer |
+
+## Resumen comparativo final
+
+| Run | Arch | Clases | Augmentation | mAP@0.5 | mAP@0.5:0.95 | Ganador? |
+|---|---|---|---|---|---|---|
+| Run 1 | YOLO11m | 10 | baseline | 0.722 | 0.511 | |
+| Run 2 | YOLO11m | 10 | mixup+cls_pw | 0.696 | 0.505 | |
+| Run 1c | YOLO11m | 6 | baseline | 0.904 | 0.726 | Best YOLO |
+| **Run 4** | **RF-DETR-M** | **6** | **baseline** | **0.954** | **0.752** | **⭐ PRODUCCIÓN** |
+| Run 5 | RF-DETR-M | 6 | copy-paste | 0.946 | 0.743 | |
