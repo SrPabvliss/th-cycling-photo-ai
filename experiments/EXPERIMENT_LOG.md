@@ -165,8 +165,44 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 
 ---
 
-### Run 4 — RF-DETR-M Baseline (6 clases)
-🔄 Corriendo en Modal (A10G). Pendiente resultados.
+### Run 4 — RF-DETR-M Baseline (6 clases) ✅ ⭐ BEST OVERALL / PRODUCTION MODEL
+- **Fecha:** 2026-04-21
+- **Config:** rfdetr_baseline, default resolution (576), batch=4, grad_accum=4
+- **Dataset:** v1 COCO format, filtrado a 6 clases
+- **GPU:** NVIDIA A10G (Modal)
+- **Arch:** RF-DETR-Medium (DINOv2 backbone, 33.4M params, Apache 2.0)
+- **Best EMA mAP:** 0.7594 (epoch ~final)
+
+| Métrica | RF-DETR | YOLO (Run 1c) | Δ |
+|---|---|---|---|
+| mAP@0.5 | **0.954** | 0.904 | **+5.0pp** |
+| mAP@0.5:0.95 | **0.752** | 0.726 | **+2.6pp** |
+| mAP@0.75 | **0.836** | — | — |
+
+**Per-class AP@0.5:**
+
+| Clase | RF-DETR | YOLO | Δ |
+|---|---|---|---|
+| bicycle | 0.980 | 0.995 | -1.5pp |
+| competidor_number | **0.914** | 0.863 | **+5.1pp** ✅ |
+| cyclist | **0.990** | 0.985 | +0.5pp |
+| cyclist_clothes | **0.898** | 0.867 | +3.1pp |
+| cyclist_with_bike | **0.995** | 0.770 | **+22.5pp** 🔥 |
+| helmet | **0.945** | 0.915 | +3.0pp |
+
+**COCO detailed:**
+- AP small: 0.469 | AP medium: 0.697 | AP large: 0.863
+- AR@100: 0.788
+
+**Observaciones:**
+- Supera YOLO en 5 de 6 clases (bicycle es la única donde YOLO gana marginalmente)
+- cyclist_with_bike: mejora masiva +22pp — DINOv2 maneja mejor relaciones espaciales
+- competidor_number: 0.914 supera target 0.70 por +21pp
+- mAP@0.5 = 0.954 supera target 0.80 por +15pp
+- Apache 2.0 → libre para comercialización sin costo de licencia
+- Modelo más pesado (128MB vs 39MB YOLO) pero tolerable para VPS
+
+**Decisión:** RF-DETR-M es el modelo de producción. Per ADR-007: diferencia >3pp → gana mayor mAP. RF-DETR gana por +5pp Y tiene mejor licencia.
 
 ### Run 5 — RF-DETR-M + Copy-Paste
 (pendiente)
@@ -189,3 +225,4 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | 2026-04-21 | **Simplificar a 6 clases** | Eliminar bicycle_text, clothes_text, helmet_text, objects. mAP sube 0.72→0.90 |
 | 2026-04-21 | Modal > Colab para training | A10G más rápido, --detach evita cortes, volume persiste datos |
 | 2026-04-21 | RF-DETR resolution custom no funciona | Pretrained weights incompatibles con resolution≠default, usar default (576) |
+| 2026-04-21 | **RF-DETR-M = modelo producción** | mAP@0.5=0.954 > YOLO 0.904 (+5pp), Apache 2.0, supera targets |
