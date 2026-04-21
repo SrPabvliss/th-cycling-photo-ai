@@ -116,11 +116,57 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 
 ---
 
-### Run 3 — YOLO11m + Copy-Paste
-(pendiente)
+### Run 1c — YOLO11m Baseline (6 clases) ✅ ⭐ BEST YOLO
+- **Fecha:** 2026-04-21
+- **Config:** baseline (mismo que Run 1, sin mixup/cutmix)
+- **Dataset:** v1 filtrado a 6 clases (sin bicycle_text, clothes_text, helmet_text, objects)
+- **GPU:** NVIDIA A10 (Modal)
+- **Epochs entrenados:** 150 (early stop at 120, patience=30)
+- **Best epoch:** 47
+- **Training time:** 1.37 horas
 
-### Run 4 — RF-DETR-M Baseline
-(pendiente)
+| Métrica | Run 1c (6cls) | Run 1 (10cls) | Δ |
+|---|---|---|---|
+| mAP@0.5 | **0.904** | 0.722 | **+0.182** |
+| mAP@0.5:0.95 | **0.726** | 0.511 | **+0.215** |
+| Precision | **0.938** | 0.802 | **+0.136** |
+| Recall | **0.895** | 0.736 | **+0.159** |
+
+**Per-class AP@0.5:**
+
+| Clase | AP@0.5 | vs Run 1 (10cls) |
+|---|---|---|
+| bicycle | 0.995 | +0.001 |
+| competidor_number | 0.863 | +0.069 ✅ |
+| cyclist | 0.985 | -0.006 |
+| cyclist_clothes | 0.867 | -0.012 |
+| cyclist_with_bike | 0.770 | -0.004 |
+| helmet | 0.915 | -0.025 |
+
+**Observaciones:**
+- **Supera target mAP@0.5 ≥ 0.80 con margen (+10pp)**
+- **competidor_number supera target ≥ 0.70 con +16pp**
+- Eliminar 4 clases ruidosas mejoró TODAS las métricas dramáticamente
+- Early stop a epoch 120 — modelo convergió rápido y estable
+- cyclist_with_bike es la clase más débil (0.77) — posible confusión con cyclist
+- 1.37h en A10 vs ~2h en T4 — Modal significativamente más eficiente
+
+**Decisión:** Este es el modelo YOLO ganador. 6 clases es el camino definitivo.
+
+---
+
+### Run 3 — YOLO11m + Copy-Paste (10 clases, incompleto)
+- **Fecha:** 2026-04-21
+- **Dataset:** v1 + copy-paste 3x competidor_number, 10 clases
+- **Estado:** Cortado a epoch 22 por timeout Colab
+- **mAP@0.5 a epoch 22:** 0.650 (subiendo, no convergió)
+- **Observación:** Dataset 3x más grande = 3x más lento. Epoch ~5min vs ~1.5min baseline
+- **Decisión:** No re-correr con 10 clases. Si se necesita copy-paste, hacer con 6 clases.
+
+---
+
+### Run 4 — RF-DETR-M Baseline (6 clases)
+🔄 Corriendo en Modal (A10G). Pendiente resultados.
 
 ### Run 5 — RF-DETR-M + Copy-Paste
 (pendiente)
@@ -140,3 +186,6 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | 2026-04-21 | Run 1 > Run 2 globalmente | mixup/cutmix + cls_pw=0.5 no mejora global, pero cls_pw=0.5 sí mejora competidor_number |
 | 2026-04-21 | RF-DETR: resolution custom no funciona con pretrained weights | Position embedding size mismatch, usar default (576) |
 | 2026-04-21 | Clases `*_text` son el cuello de botella para mAP global | ~0.27-0.37 AP — considerar si vale la pena mantenerlas o evaluarlas aparte |
+| 2026-04-21 | **Simplificar a 6 clases** | Eliminar bicycle_text, clothes_text, helmet_text, objects. mAP sube 0.72→0.90 |
+| 2026-04-21 | Modal > Colab para training | A10G más rápido, --detach evita cortes, volume persiste datos |
+| 2026-04-21 | RF-DETR resolution custom no funciona | Pretrained weights incompatibles con resolution≠default, usar default (576) |
