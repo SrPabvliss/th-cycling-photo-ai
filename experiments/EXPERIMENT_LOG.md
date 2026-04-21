@@ -34,52 +34,85 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 
 ---
 
-### Run 1 — YOLO11m Baseline
-- **Fecha:**
+### Run 1 — YOLO11m Baseline ✅
+- **Fecha:** 2026-04-21
 - **Config:** `configs/training/yolo11m_baseline.yaml`
-- **Dataset:** v1 (sin flip)
+- **Dataset:** v1 (sin flip), Roboflow v7
+- **GPU:** Tesla T4 (Colab)
 - **Hipótesis:** Establecer baseline limpio con config conservadora
-- **Resultado:**
+- **Epochs entrenados:** 115 (early stop, best at epoch 84)
 
 | Métrica | Valor |
 |---|---|
-| mAP@0.5 | |
-| mAP@0.5:0.95 | |
-| Precision | |
-| Recall | |
-| Epochs entrenados | |
-| Mejor epoch | |
+| mAP@0.5 | 0.7223 |
+| mAP@0.5:0.95 | 0.5113 |
+| Precision | 0.8020 |
+| Recall | 0.7362 |
 
 **Per-class AP@0.5:**
 
-| Clase | AP@0.5 |
-|---|---|
-| bicycle | |
-| bicycle_text | |
-| clothes_text | |
-| competidor_number | |
-| cyclist | |
-| cyclist_clothes | |
-| cyclist_with_bike | |
-| helmet | |
-| helmet_text | |
-| objects | |
+| Clase | AP@0.5 | Nota |
+|---|---|---|
+| bicycle | 0.9940 | Excelente |
+| bicycle_text | 0.3301 | Débil — objeto pequeño |
+| clothes_text | 0.3755 | Débil — objeto pequeño |
+| competidor_number | 0.7942 | ✅ Supera target 0.70 |
+| cyclist | 0.9908 | Excelente |
+| cyclist_clothes | 0.8790 | Bueno |
+| cyclist_with_bike | 0.7739 | Aceptable |
+| helmet | 0.9402 | Excelente |
+| helmet_text | 0.2669 | Débil — objeto pequeño |
+| objects | 0.8666 | Bueno (solo 171 samples) |
 
 **Observaciones:**
+- Mejora masiva vs experimentos previos (0.52 → 0.72) — dataset más grande + config correcta
+- Clases `*_text` consistentemente débiles (~0.27-0.37) — objetos muy pequeños
+- 5 clases core (bicycle, cyclist, helmet, cyclist_clothes, cyclist_with_bike) todas >0.77
+- No alcanza target global 0.80 — lastrado por clases `*_text`
+- Early stop a epoch 115, convergió rápido (best epoch 84)
 
-**Decisión:**
+**Decisión:** Mejor run YOLO hasta ahora. Baseline establecido.
 
 ---
 
-### Run 2 — YOLO11m Optimized
-- **Fecha:**
+### Run 2 — YOLO11m Optimized ✅
+- **Fecha:** 2026-04-21
 - **Config:** `configs/training/yolo11m_optimized.yaml`
-- **Dataset:** v1 (sin flip)
+- **Dataset:** v1 (sin flip), Roboflow v7
+- **GPU:** Tesla T4 (Colab)
 - **Hipótesis:** mixup=0.1 + cls_pw=0.5 mejoran clases minoritarias
 - **Cambios vs Run 1:** mixup 0→0.1, cutmix 0→0.1, cls_pw 1.0→0.5
-- **Resultado:**
+- **Epochs entrenados:** 106 (early stop, best at epoch 70)
 
-(pendiente)
+| Métrica | Valor | Δ vs Run 1 |
+|---|---|---|
+| mAP@0.5 | 0.6963 | -0.026 ❌ |
+| mAP@0.5:0.95 | 0.5052 | -0.006 |
+| Precision | 0.8228 | +0.021 |
+| Recall | 0.7184 | -0.018 |
+
+**Per-class AP@0.5:**
+
+| Clase | AP@0.5 | Δ vs Run 1 |
+|---|---|---|
+| bicycle | 0.9948 | +0.001 |
+| bicycle_text | 0.3261 | -0.004 |
+| clothes_text | 0.3223 | -0.053 |
+| competidor_number | 0.8442 | **+0.050** ✅ |
+| cyclist | 0.9809 | -0.010 |
+| cyclist_clothes | 0.8784 | -0.001 |
+| cyclist_with_bike | 0.7682 | -0.006 |
+| helmet | 0.9418 | +0.002 |
+| helmet_text | 0.2519 | -0.015 |
+| objects | 0.6131 | **-0.254** ❌ |
+
+**Observaciones:**
+- cls_pw=0.5 mejoró `competidor_number` (+5pp) como se esperaba
+- Pero `objects` se desplomó (-25pp) — clase con 171 muestras no tolera cls_pw bajo
+- mixup/cutmix no ayudaron al global — posiblemente contraproducente con dataset de este tamaño
+- Convergió más rápido (epoch 70 vs 84) — posible underfitting por augmentation excesiva
+
+**Decisión:** cls_pw=0.5 mejora competidor_number pero daña clases pequeñas. Para Run 3 (copy-paste): mantener cls_pw=0.5 pero compensar con oversampling offline.
 
 ---
 
@@ -104,4 +137,6 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | 2026-04-20 | Usar 10 clases (no 5) | Usuario decide incluir todas |
 | 2026-04-20 | Dataset v7/v8 con Fit 640 (no Stretch 1280) | Evitar distorsión aspect ratio |
 | 2026-04-20 | Augmentation offline suave (exposure+blur+noise+saturation) | YOLO/RF-DETR aplican augmentation runtime |
-| | | |
+| 2026-04-21 | Run 1 > Run 2 globalmente | mixup/cutmix + cls_pw=0.5 no mejora global, pero cls_pw=0.5 sí mejora competidor_number |
+| 2026-04-21 | RF-DETR: resolution custom no funciona con pretrained weights | Position embedding size mismatch, usar default (576) |
+| 2026-04-21 | Clases `*_text` son el cuello de botella para mAP global | ~0.27-0.37 AP — considerar si vale la pena mantenerlas o evaluarlas aparte |
