@@ -86,8 +86,27 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 ## Runs
 
-### Run 1 — PARSeq-tiny Phase 1 (Synthetic)
-(pendiente)
+### Run 1 — PARSeq-tiny Phase 1 (Synthetic) ✅
+- **Fecha:** 2026-04-22
+- **GPU:** NVIDIA A10G (Modal)
+- **Dataset:** 200K synthetic (190K train / 10K val)
+- **Architecture:** CRNN fallback (torch.hub PARSeq load failed — version mismatch)
+- **Epochs:** 50
+- **LR:** 7e-4 (OneCycleLR)
+- **Batch:** 128
+- **Training time:** 54 minutes
+
+| Métrica | Valor |
+|---|---|
+| Best val accuracy | **0.698** |
+
+**Observaciones:**
+- 69.8% en synthetic val — aceptable para Phase 1 (pretexto: aprender forma de dígitos)
+- torch.hub PARSeq-tiny falló por incompatibilidad de versión → cayó a CRNN fallback
+- TODO: investigar instalación correcta de PARSeq para Phase 2 o usar CRNN como baseline válido
+- La accuracy subirá significativamente con SVHN (Phase 2) y fine-tune (Phase 3)
+
+**Decisión:** Proceder con Phase 2. Si CRNN alcanza targets con fine-tune, considerar como alternativa a PARSeq.
 
 ### Run 2 — PP-OCRv5 Phase 1 (Synthetic)
 (pendiente)
