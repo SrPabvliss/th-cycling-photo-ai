@@ -1,7 +1,6 @@
-"""Extract competidor_number crops from COCO annotations.
+"""Extract competidor_number crops from clean (no-augmentation) COCO annotations.
 
-Reads all splits (train/valid/test), crops each competidor_number bbox
-with 12% padding, saves to data/ocr/crops/ with metadata CSV.
+Uses Roboflow v9 (clean, no augmentation) to get clear crops for OCR labeling.
 
 Usage:
     uv run python scripts/extract_bib_crops.py
@@ -16,7 +15,7 @@ from pathlib import Path
 import cv2
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-COCO_DIR = PROJECT_ROOT / "data" / "v1" / "coco"
+COCO_DIR = PROJECT_ROOT / "data" / "ocr" / "clean_v9"
 OUTPUT_DIR = PROJECT_ROOT / "data" / "ocr" / "crops"
 METADATA_CSV = OUTPUT_DIR / "crops_metadata.csv"
 
@@ -41,7 +40,6 @@ def extract_crops():
         with open(ann_path) as f:
             coco = json.load(f)
 
-        # Find competidor_number category ID
         comp_cat_id = None
         for cat in coco["categories"]:
             if cat["name"] == COMPETIDOR_NUMBER:
@@ -52,10 +50,7 @@ def extract_crops():
             print(f"  {split}: no competidor_number category")
             continue
 
-        # Build image lookup
         img_lookup = {img["id"]: img for img in coco["images"]}
-
-        # Filter annotations
         comp_anns = [a for a in coco["annotations"] if a["category_id"] == comp_cat_id]
         print(f"  {split}: {len(comp_anns)} competidor_number annotations")
 
@@ -73,13 +68,10 @@ def extract_crops():
                 continue
 
             h, w = img.shape[:2]
-
-            # COCO bbox = [x, y, width, height]
             bx, by, bw, bh = ann["bbox"]
             x1, y1 = int(bx), int(by)
             x2, y2 = int(bx + bw), int(by + bh)
 
-            # Add padding
             pad_x = int(bw * PADDING_RATIO)
             pad_y = int(bh * PADDING_RATIO)
 
@@ -106,18 +98,17 @@ def extract_crops():
                 "bbox_h": int(bh),
                 "crop_w": px2 - px1,
                 "crop_h": py2 - py1,
-                "bib_number": "",  # TO BE LABELED
+                "bib_number": "",
             })
             crop_id += 1
 
-    # Write metadata CSV
     with open(METADATA_CSV, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
 
     print(f"\n{'='*60}")
-    print(f"Extracted {crop_id} crops to {OUTPUT_DIR}")
+    print(f"Extracted {crop_id} CLEAN crops (no augmentation)")
     print(f"Metadata: {METADATA_CSV}")
     print(f"\nNext: uv run python scripts/label_bib_crops.py")
 
