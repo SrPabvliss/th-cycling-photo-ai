@@ -37,12 +37,50 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 ## Dataset
 
-- **Source:** competidor_number crops from RF-DETR-M detector
-- **Target size:** 1,000-1,200 labeled crops
-- **Label format:** image_id, bib_number, condition_flags
-- **Splits:** 200 test (blocked), 1,000 train+val (5-fold StratifiedKFold)
+### Proprietary crops (labeled 2026-04-22)
 
-(pending creation)
+- **Source:** competidor_number bboxes from Roboflow v9 (clean, no augmentation)
+- **Extraction:** 12% padding on each bbox, saved as JPEG
+- **Total extracted:** 703 crops from 1,025 images (train+valid+test)
+- **Labeled:** 418 (bib number typed manually via terminal tool)
+- **Skipped:** 285 (41%) — illegible, too small, or occluded
+- **Unique bib numbers:** 203
+
+**Digit length distribution:**
+
+| Length | Count | % |
+|---|---|---|
+| 1 digit | 14 | 3% |
+| 2 digits | 132 | 32% |
+| 3 digits | 272 | 65% |
+
+**Splits (StratifiedKFold by digit length, seed=42):**
+
+| Split | Samples | Purpose |
+|---|---|---|
+| Test (blocked) | 63 | Final evaluation only — SHA-256 locked |
+| Train+Val | 355 | 5-fold CV, 284 train / 71 val per fold |
+
+**Formats:** LMDB (PARSeq) + TXT list (PP-OCRv5)
+
+**Note:** 418 samples < ADR target of 1,200. Compensated by synthetic pretraining (200K) + SVHN (600K). Fine-tuning with small dataset + pretrained backbone should still reach targets per literature (Koshkina & Elder 2024 used ~300 real samples).
+
+### Synthetic data (generated 2026-04-22)
+
+- **Tool:** Custom generator (not TRDG) — sport fonts + varied backgrounds
+- **Count:** 200,000 images
+- **Size:** 128×32px (PARSeq default)
+- **Fonts:** Bebas Neue, Oswald, Anton, Big Shoulders Display, Barlow Condensed, Roboto Condensed, Impact (7 fonts, all OFL/system)
+- **Backgrounds:** solid colors (30%), gradients (30%), noisy fabric (25%), dark (15%)
+- **Augmentations:** rotation ±8°, perspective warp, Gaussian blur, brightness/contrast, JPEG compression artifacts, Gaussian noise
+- **Charset:** 0-9 only, 1-4 digits
+- **Distribution:** 3% 1-digit, 32% 2-digit, 65% 3-digit (matches real data)
+- **Formats:** LMDB + TXT list + images/
+
+### SVHN (pending download)
+
+- Stanford Street View House Numbers, 600K+ real digit images
+- Research only (non-commercial license)
 
 ---
 
@@ -83,6 +121,10 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-21 | Single FastAPI service | In-memory crops, no network hops, 8GB RAM (CPX31) |
 | 2026-04-21 | Conditional preprocessing (not unconditional) | Statistical gates prevent destroying good inputs |
 | 2026-04-21 | 3-layer reject option | Deep Gamblers + temperature + startlist validation |
+| 2026-04-22 | Clean v9 for labeling (no augmentation) | Augmented crops ambiguous — same bib looks like different numbers with noise/blur |
+| 2026-04-22 | 418 labeled / 285 skipped (41%) | Many crops too small or occluded; compensated with 200K synthetic pretraining |
+| 2026-04-22 | Custom synthetic generator (not TRDG) | More control over sport fonts, fabric backgrounds, and digit distribution matching real data |
+| 2026-04-22 | CPX31 (8GB RAM) for deployment | Detection + OCR + future color won't fit in CPX21 (4GB). $11/mo more |
 
 ---
 
