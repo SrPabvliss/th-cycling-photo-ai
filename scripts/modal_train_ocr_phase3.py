@@ -83,7 +83,7 @@ def train_phase3_v2():
     ])
 
     # ---- Dataset ----
-    IMG_SIZE = 64  # square input
+    IMG_SIZE = 224  # ResNet native resolution
 
     class BibDataset(Dataset):
         def __init__(self, lmdb_path, augment=False):
@@ -138,37 +138,51 @@ def train_phase3_v2():
             [b[2] for b in batch],
         )
 
-    # ---- Model: ResNet-18 backbone + 4 digit heads ----
+    # ---- Model: ResNet-18 + spatial attention per digit ----
     import timm
 
     class BibDigitClassifier(nn.Module):
-        """Multi-digit classifier for bib numbers.
+        """Multi-digit classifier with spatial attention.
 
-        Shared CNN backbone → global pool → 4 independent digit classifiers.
-        Each classifier outputs 11 classes (0-9 + blank).
+        ResNet-18 → spatial feature map (7×7×512) → per-digit attention → classifier.
+        Each digit head attends to different spatial locations, preserving positional info.
         """
         def __init__(self, max_digits=4, num_classes=11, pretrained=True):
             super().__init__()
+            # ResNet-18 without global pool — keep spatial features
             self.backbone = timm.create_model(
-                'resnet18', pretrained=pretrained, num_classes=0,
+                'resnet18', pretrained=pretrained, num_classes=0, global_pool='',
             )
-            feat_dim = self.backbone.num_features  # 512 for resnet18
+            feat_dim = 512  # resnet18 last layer channels
 
+            # Per-digit spatial attention + classifier
             self.digit_heads = nn.ModuleList([
-                nn.Sequential(
-                    nn.Dropout(0.3),
-                    nn.Linear(feat_dim, 128),
-                    nn.ReLU(),
-                    nn.Dropout(0.2),
-                    nn.Linear(128, num_classes),
-                )
+                nn.ModuleDict({
+                    'attn': nn.Sequential(
+                        nn.Conv2d(feat_dim, 1, 1),  # spatial attention map
+                    ),
+                    'classifier': nn.Sequential(
+                        nn.Dropout(0.3),
+                        nn.Linear(feat_dim, 128),
+                        nn.ReLU(),
+                        nn.Dropout(0.2),
+                        nn.Linear(128, num_classes),
+                    ),
+                })
                 for _ in range(max_digits)
             ])
 
         def forward(self, x):
-            features = self.backbone(x)  # (B, feat_dim)
-            # Each head predicts one digit position
-            logits = [head(features) for head in self.digit_heads]
+            feat_map = self.backbone(x)  # (B, 512, 7, 7) for 224×224 input
+            B, C, H, W = feat_map.shape
+
+            logits = []
+            for head in self.digit_heads:
+                # Spatial attention: learn which region to look at for this digit
+                attn_weights = head['attn'](feat_map)  # (B, 1, H, W)
+                attn_weights = attn_weights.view(B, 1, -1).softmax(-1).view(B, 1, H, W)
+                attended = (feat_map * attn_weights).sum(dim=[2, 3])  # (B, C)
+                logits.append(head['classifier'](attended))
             return torch.stack(logits, dim=1)  # (B, max_digits, num_classes)
 
     # ---- Training ----
@@ -276,7 +290,8 @@ def train_phase3_v2():
             em, digit_accs = evaluate()
             elapsed = (time.time() - start) / 60
             d_str = " ".join(f"d{i}={a:.2f}" for i, a in enumerate(digit_accs))
-            print(f"  Epoch {epoch+1}/{EPOCHS} — loss: {avg_loss:.3f}, EM: {em:.4f} ({int(em*71)}/71), {d_str}, time: {elapsed:.1f}m")
+            n_val = len(val_ds)
+            print(f"  Epoch {epoch+1}/{EPOCHS} — loss: {avg_loss:.3f}, EM: {em:.4f} ({int(em*n_val)}/{n_val}), {d_str}, time: {elapsed:.1f}m")
 
             if em > best_em:
                 best_em = em
