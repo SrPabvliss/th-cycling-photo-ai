@@ -22,6 +22,7 @@ volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=True)
 # Container image with all dependencies
 image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install("libgl1-mesa-glx", "libglib2.0-0")
     .pip_install(
         "ultralytics>=8.3.0",
         "roboflow>=1.1.0",
@@ -43,8 +44,8 @@ ROBOFLOW_API_KEY = "xOdnFACkI2vaUzBKVRic"
 
 @app.function(
     image=image,
-    gpu="l4",  # L4 24GB — good balance price/performance. Options: "t4", "l4", "a10g", "a100"
-    timeout=7200,  # 2 hours max
+    gpu="a10g",  # A10G 24GB — fast training
+    timeout=18000,  # 5 hours max
     volumes={VOLUME_PATH: volume},
 )
 def train_yolo_6classes():

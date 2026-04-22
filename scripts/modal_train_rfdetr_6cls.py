@@ -35,7 +35,7 @@ ROBOFLOW_API_KEY = "xOdnFACkI2vaUzBKVRic"
 @app.function(
     image=image,
     gpu="a10g",  # A10G 24GB — faster than L4 for transformers
-    timeout=21600,  # 6 hours max
+    timeout=36000,  # 10 hours max
     volumes={VOLUME_PATH: volume},
 )
 def train_rfdetr_6classes():
