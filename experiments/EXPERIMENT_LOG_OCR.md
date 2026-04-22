@@ -12,9 +12,11 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 ## Architecture
 
-- **Comparison:** PARSeq-tiny (~5-7M params) vs PP-OCRv5 mobile (~10M params)
-- **Both:** Apache 2.0, ONNX exportable, numeric charset only (0-9)
-- **Winner criterion:** EM @ 80% coverage (higher wins; <2pp → PARSeq wins)
+- **Original plan:** PARSeq-tiny vs PP-OCRv5 mobile (both Apache 2.0)
+- **Actual:** ViT-tiny STR (5.6M) vs SVTR_LCNet (0.3M) — both PyTorch
+- **Why pivot:** PARSeq strhub/torch.hub install broken; PaddlePaddle segfaults on Modal + Colab
+- **Architecturally equivalent:** ViT encoder + attn decoder vs MobileNet + SVTR + CTC
+- **Winner criterion:** EM @ 80% coverage (higher wins; <2pp → ViT-tiny wins as academically stronger)
 
 ## Pretraining chain
 
@@ -147,16 +149,16 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** Ambos modelos viables. Proceder con Phase 2 (SVHN) para ambos.
 
-### Run 3 — PARSeq-tiny Phase 2 (SVHN)
+### Run 3 — ViT-tiny STR Phase 2 (SVHN)
 (pendiente)
 
-### Run 4 — PP-OCRv5 Phase 2 (SVHN)
+### Run 4 — SVTR_LCNet Phase 2 (SVHN)
 (pendiente)
 
-### Run 5 — PARSeq-tiny Fine-tune (5 seeds)
+### Run 5 — ViT-tiny STR Fine-tune (5 seeds)
 (pendiente)
 
-### Run 6 — PP-OCRv5 Fine-tune (5 seeds)
+### Run 6 — SVTR_LCNet Fine-tune (5 seeds)
 (pendiente)
 
 ### Run 7 — Winner Calibration (Temperature Scaling)
@@ -181,7 +183,7 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-22 | Custom synthetic generator (not TRDG) | More control over sport fonts, fabric backgrounds, and digit distribution matching real data |
 | 2026-04-22 | CPX31 (8GB RAM) for deployment | Detection + OCR + future color won't fit in CPX21 (4GB). $11/mo more |
 | 2026-04-22 | ViT-tiny STR reemplaza PARSeq-tiny | PARSeq no instala en Modal (strhub config + torch.hub interactive). ViT-tiny STR: misma familia (ViT encoder + attn decoder), 5.6M params, PyTorch nativo |
-| 2026-04-22 | PP-OCRv5 entrena en Colab (no Modal) | PaddlePaddle segfault en Modal por CUDA driver mismatch. Colab tiene PaddlePaddle nativo |
+| 2026-04-22 | PP-OCRv5 → SVTR_LCNet en PyTorch | PaddlePaddle segfault en Modal Y Colab (CUDA/cuDNN mismatch). Reimplementación PyTorch de la misma arquitectura (MobileNetV1 + SVTR + CTC) |
 
 ---
 
