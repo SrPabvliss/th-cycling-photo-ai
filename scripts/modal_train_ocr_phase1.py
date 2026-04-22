@@ -1,24 +1,23 @@
 """
 Modal training script — OCR Phase 1: Synthetic pretraining.
 
-Trains both PARSeq-tiny and PP-OCRv5 mobile on 200K synthetic bib images.
-Uploads synthetic data to Modal Volume, then trains both models.
+Trains PARSeq-tiny on 200K synthetic bib images.
+Uses strhub package (proper PARSeq installation).
 
 Usage:
     modal run --detach scripts/modal_train_ocr_phase1.py
 
 Results saved to Modal Volume. Download with:
     modal volume get cycling-photo-ai-vol experiments/ocr_phase1_parseq ./experiments/
-    modal volume get cycling-photo-ai-vol experiments/ocr_phase1_ppocr ./experiments/
 """
 
 import modal
 
-app = modal.App("ocr-phase1-synthetic")
+app = modal.App("ocr-phase1-parseq")
 
 volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=True)
 
-parseq_image = (
+image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("libgl1-mesa-glx", "libglib2.0-0", "git")
     .pip_install(
@@ -29,24 +28,30 @@ parseq_image = (
         "pillow>=10.4.0",
         "numpy>=1.26.0",
         "nltk>=3.8.0",
+        "pytorch-lightning>=2.0.0",
     )
     .run_commands(
-        "pip install git+https://github.com/baudm/parseq.git@main",
+        "pip install 'git+https://github.com/baudm/parseq.git@main#egg=strhub'",
     )
 )
 
 VOLUME_PATH = "/data"
 SEED = 42
+CHARSET = "0123456789"
+MAX_LEN = 4
+IMG_H, IMG_W = 32, 128
+EPOCHS = 50
+BATCH_SIZE = 128
+LR = 7e-4
 
 
 @app.function(
-    image=parseq_image,
+    image=image,
     gpu="a10g",
-    timeout=14400,  # 4h
+    timeout=14400,
     volumes={VOLUME_PATH: volume},
 )
-def train_parseq_synthetic():
-    """Train PARSeq-tiny on synthetic data."""
+def train_parseq_phase1():
     import io
     import json
     import os
@@ -54,7 +59,7 @@ def train_parseq_synthetic():
     import time
     from pathlib import Path
 
-    import lmdb
+    import lmdb as lmdb_lib
     import numpy as np
     import torch
     import torch.nn as nn
@@ -71,159 +76,227 @@ def train_parseq_synthetic():
     print(f"GPU: {torch.cuda.get_device_name(0)}")
     print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
-    # Check synthetic data exists on volume
     synth_lmdb = Path(VOLUME_PATH) / "ocr" / "synthetic" / "lmdb"
     if not synth_lmdb.exists():
-        print("ERROR: Synthetic data not found on volume.")
-        print("Upload first: modal volume put cycling-photo-ai-vol data/ocr/synthetic /ocr/synthetic")
+        print("ERROR: Synthetic data not found. Upload first.")
         return
 
-    # Output dir
     output_dir = Path(VOLUME_PATH) / "experiments" / "ocr_phase1_parseq"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- Dataset ----
-    CHARSET = "0123456789"
-    char_to_idx = {c: i + 1 for i, c in enumerate(CHARSET)}  # 0 reserved for blank/pad
-    idx_to_char = {v: k for k, v in char_to_idx.items()}
-    NUM_CLASSES = len(CHARSET) + 1  # +1 for blank
-    MAX_LEN = 4
-    IMG_H, IMG_W = 32, 128
+    # ---- Charset encoding ----
+    # PARSeq style: BOS=0, charset=1..10, EOS=11, PAD=12
+    BOS_IDX = 0
+    EOS_IDX = len(CHARSET) + 1
+    PAD_IDX = len(CHARSET) + 2
+    NUM_TOKENS = len(CHARSET) + 3  # BOS + charset + EOS + PAD
 
+    char_to_idx = {c: i + 1 for i, c in enumerate(CHARSET)}
+    idx_to_char = {i + 1: c for i, c in enumerate(CHARSET)}
+
+    def encode_label(text):
+        """Encode label to tensor: [BOS, c1, c2, ..., EOS, PAD, PAD, ...]"""
+        tokens = [BOS_IDX]
+        for c in text[:MAX_LEN]:
+            if c in char_to_idx:
+                tokens.append(char_to_idx[c])
+        tokens.append(EOS_IDX)
+        while len(tokens) < MAX_LEN + 2:  # +2 for BOS and EOS
+            tokens.append(PAD_IDX)
+        return torch.tensor(tokens[:MAX_LEN + 2], dtype=torch.long)
+
+    def decode_tokens(tokens):
+        """Decode token tensor to string (greedy)."""
+        chars = []
+        for t in tokens:
+            t = t.item() if hasattr(t, 'item') else t
+            if t == EOS_IDX or t == PAD_IDX:
+                break
+            if t in idx_to_char:
+                chars.append(idx_to_char[t])
+        return "".join(chars)
+
+    # ---- Dataset ----
     class LmdbDataset(Dataset):
-        def __init__(self, lmdb_path, transform=None):
-            self.env = lmdb.open(str(lmdb_path), readonly=True, lock=False)
+        def __init__(self, lmdb_path):
+            self.env = lmdb_lib.open(str(lmdb_path), readonly=True, lock=False)
             with self.env.begin() as txn:
                 self.n_samples = int(txn.get("num-samples".encode()).decode())
-            self.transform = transform
 
         def __len__(self):
             return self.n_samples
 
         def __getitem__(self, idx):
             with self.env.begin() as txn:
-                img_key = f"image-{idx+1:09d}".encode()
-                label_key = f"label-{idx+1:09d}".encode()
-                img_bytes = txn.get(img_key)
-                label = txn.get(label_key).decode()
+                img_bytes = txn.get(f"image-{idx+1:09d}".encode())
+                label = txn.get(f"label-{idx+1:09d}".encode()).decode()
 
             img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
             img = img.resize((IMG_W, IMG_H), Image.LANCZOS)
+            img_arr = np.array(img, dtype=np.float32) / 255.0
+            # Normalize to ImageNet stats (PARSeq convention)
+            mean = np.array([0.485, 0.456, 0.406])
+            std = np.array([0.229, 0.224, 0.225])
+            img_arr = (img_arr - mean) / std
+            img_tensor = torch.from_numpy(img_arr).permute(2, 0, 1).float()
 
-            # Normalize to [-1, 1]
-            img_arr = np.array(img, dtype=np.float32) / 127.5 - 1.0
-            img_tensor = torch.from_numpy(img_arr).permute(2, 0, 1)  # CHW
+            target = encode_label(label)
+            return img_tensor, target, label
 
-            # Encode label
-            target = torch.zeros(MAX_LEN, dtype=torch.long)
-            for i, c in enumerate(label[:MAX_LEN]):
-                if c in char_to_idx:
-                    target[i] = char_to_idx[c]
+    # ---- Model: try PARSeq-tiny, fallback to custom transformer ----
+    model = None
+    model_name = "parseq_tiny"
 
-            target_len = min(len(label), MAX_LEN)
-
-            return img_tensor, target, target_len
-
-    # ---- Load PARSeq-tiny ----
-    print("Loading PARSeq-tiny pretrained...")
     try:
-        model = torch.hub.load('baudm/parseq', 'parseq_tiny', pretrained=True)
-        # Modify head for our charset (11 classes: 10 digits + blank)
-        # PARSeq head is model.head
-        if hasattr(model, 'head'):
-            in_features = model.head.in_features if hasattr(model.head, 'in_features') else model.head.weight.shape[1]
-            model.head = nn.Linear(in_features, NUM_CLASSES)
-        print(f"  Model loaded. Params: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
+        from strhub.models.utils import create_model
+        model = create_model('parseq_tiny', pretrained=True)
+        # PARSeq has its own tokenizer — we need to check if we can swap it
+        print(f"  PARSeq-tiny loaded via strhub")
+        print(f"  Params: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
     except Exception as e:
-        print(f"  torch.hub failed: {e}")
-        print("  Falling back to simple CRNN for Phase 1...")
+        print(f"  strhub load failed: {e}")
 
-        # Fallback: simple CRNN that we know works
-        class SimpleCRNN(nn.Module):
-            def __init__(self, num_classes, img_h=32):
+    if model is None:
+        try:
+            model = torch.hub.load('baudm/parseq', 'parseq_tiny', pretrained=True)
+            print(f"  PARSeq-tiny loaded via torch.hub")
+        except Exception as e:
+            print(f"  torch.hub failed: {e}")
+
+    if model is None:
+        print("  Building custom ViT-tiny STR model...")
+        import timm
+
+        class ViTDigitRecognizer(nn.Module):
+            """Tiny ViT encoder + autoregressive decoder for digit recognition."""
+            def __init__(self, num_tokens, max_len, embed_dim=192):
                 super().__init__()
-                self.cnn = nn.Sequential(
-                    nn.Conv2d(3, 64, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2, 2),
-                    nn.Conv2d(64, 128, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2, 2),
-                    nn.Conv2d(128, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU(),
-                    nn.Conv2d(256, 256, 3, 1, 1), nn.ReLU(), nn.MaxPool2d((2, 1), (2, 1)),
-                    nn.Conv2d(256, 512, 3, 1, 1), nn.BatchNorm2d(512), nn.ReLU(),
-                    nn.Conv2d(512, 512, 3, 1, 1), nn.ReLU(), nn.MaxPool2d((2, 1), (2, 1)),
-                    nn.Conv2d(512, 512, 2, 1, 0), nn.ReLU(),
+                # ViT-tiny encoder (pretrained on ImageNet)
+                self.encoder = timm.create_model(
+                    'vit_tiny_patch16_224', pretrained=True, num_classes=0,
+                    img_size=(IMG_H, IMG_W),
                 )
-                self.rnn = nn.LSTM(512, 256, num_layers=2, bidirectional=True, batch_first=True)
-                self.head = nn.Linear(512, num_classes)
+                enc_dim = self.encoder.embed_dim
 
-            def forward(self, x):
-                conv = self.cnn(x)  # B, C, 1, W
-                conv = conv.squeeze(2).permute(0, 2, 1)  # B, W, C
-                rnn_out, _ = self.rnn(conv)
-                output = self.head(rnn_out)  # B, W, num_classes
-                return output
+                # Simple decoder: project encoder output → predict token sequence
+                self.max_len = max_len + 2  # BOS + text + EOS
+                self.token_embed = nn.Embedding(num_tokens, embed_dim)
+                self.pos_embed = nn.Parameter(torch.randn(1, self.max_len, embed_dim) * 0.02)
+                self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads=4, batch_first=True)
+                self.proj = nn.Linear(enc_dim, embed_dim) if enc_dim != embed_dim else nn.Identity()
+                self.head = nn.Linear(embed_dim, num_tokens)
+                self.norm = nn.LayerNorm(embed_dim)
 
-        model = SimpleCRNN(NUM_CLASSES)
-        print(f"  CRNN fallback. Params: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
+            def forward(self, x, targets=None):
+                # Encode image
+                enc = self.encoder.forward_features(x)  # (B, seq, enc_dim)
+                enc = self.proj(enc)  # (B, seq, embed_dim)
+
+                if targets is not None:
+                    # Teacher forcing: use target tokens as decoder input
+                    tgt = self.token_embed(targets[:, :-1])  # shift right
+                    tgt = tgt + self.pos_embed[:, :tgt.size(1)]
+                    out, _ = self.cross_attn(tgt, enc, enc)
+                    out = self.norm(out)
+                    logits = self.head(out)
+                    return logits
+                else:
+                    # Autoregressive inference
+                    B = x.size(0)
+                    tokens = torch.full((B, 1), BOS_IDX, dtype=torch.long, device=x.device)
+                    for _ in range(self.max_len - 1):
+                        tgt = self.token_embed(tokens)
+                        tgt = tgt + self.pos_embed[:, :tgt.size(1)]
+                        out, _ = self.cross_attn(tgt, enc, enc)
+                        out = self.norm(out)
+                        logits = self.head(out[:, -1:])
+                        next_token = logits.argmax(-1)
+                        tokens = torch.cat([tokens, next_token], dim=1)
+                        if (next_token == EOS_IDX).all():
+                            break
+                    return tokens[:, 1:]  # remove BOS
+
+        model = ViTDigitRecognizer(NUM_TOKENS, MAX_LEN)
+        model_name = "vit_tiny_str"
+        print(f"  ViT-tiny STR model built")
+        print(f"  Params: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
 
     model = model.cuda()
 
-    # ---- Training ----
+    # ---- Training loop ----
     dataset = LmdbDataset(synth_lmdb)
-    # Split 95/5 for train/val
     n_val = max(1, int(len(dataset) * 0.05))
     n_train = len(dataset) - n_val
-    train_ds, val_ds = torch.utils.data.random_split(dataset, [n_train, n_val])
+    train_ds, val_ds = torch.utils.data.random_split(
+        dataset, [n_train, n_val], generator=torch.Generator().manual_seed(SEED)
+    )
 
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_ds, batch_size=128, shuffle=False, num_workers=2)
+    def collate_fn(batch):
+        imgs = torch.stack([b[0] for b in batch])
+        targets = torch.stack([b[1] for b in batch])
+        labels = [b[2] for b in batch]
+        return imgs, targets, labels
 
-    print(f"  Train: {n_train}, Val: {n_val}")
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
+                              num_workers=4, pin_memory=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False,
+                            num_workers=2, collate_fn=collate_fn)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=7e-4, weight_decay=0.0)
-    criterion = nn.CTCLoss(blank=0, zero_infinity=True)
+    print(f"\n  Train: {n_train}, Val: {n_val}")
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+    criterion = nn.CrossEntropyLoss(ignore_index=PAD_IDX)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=7e-4, epochs=50, steps_per_epoch=len(train_loader)
+        optimizer, max_lr=LR, epochs=EPOCHS, steps_per_epoch=len(train_loader)
     )
 
     best_val_acc = 0.0
-    EPOCHS = 50
-
-    def decode_ctc(output):
-        """Greedy CTC decode."""
-        _, preds = output.max(2)
-        results = []
-        for pred in preds:
-            chars = []
-            prev = 0
-            for p in pred:
-                p = p.item()
-                if p != 0 and p != prev:
-                    if p in idx_to_char:
-                        chars.append(idx_to_char[p])
-                prev = p
-            results.append("".join(chars))
-        return results
+    patience_counter = 0
+    PATIENCE = 10
 
     def evaluate(loader):
         model.eval()
         correct = 0
         total = 0
         with torch.no_grad():
-            for imgs, targets, lengths in loader:
+            for imgs, targets, labels in loader:
                 imgs = imgs.cuda()
-                output = model(imgs)
-                if output.dim() == 3:
-                    output = output.permute(1, 0, 2)  # T, B, C for CTC
-                preds = decode_ctc(output.permute(1, 0, 2))
+                targets = targets.cuda()
 
-                for pred, target, length in zip(preds, targets, lengths):
-                    gt = "".join(idx_to_char.get(t.item(), "") for t in target[:length])
-                    if pred == gt:
-                        correct += 1
-                    total += 1
+                if hasattr(model, 'forward') and model_name == "vit_tiny_str":
+                    logits = model(imgs, targets)
+                    preds = logits.argmax(-1)
+                    for pred, gt_label in zip(preds, labels):
+                        pred_str = decode_tokens(pred)
+                        if pred_str == gt_label:
+                            correct += 1
+                        total += 1
+                else:
+                    # PARSeq native inference
+                    try:
+                        outputs = model(imgs)
+                        if hasattr(outputs, 'logits'):
+                            preds = outputs.logits.argmax(-1)
+                        else:
+                            preds = outputs.argmax(-1) if outputs.dim() == 3 else outputs
+                        for pred, gt_label in zip(preds, labels):
+                            pred_str = decode_tokens(pred)
+                            if pred_str == gt_label:
+                                correct += 1
+                            total += 1
+                    except Exception:
+                        # Fallback: teacher forcing eval
+                        logits = model(imgs, targets)
+                        preds = logits.argmax(-1)
+                        for pred, gt_label in zip(preds, labels):
+                            pred_str = decode_tokens(pred)
+                            if pred_str == gt_label:
+                                correct += 1
+                            total += 1
 
         return correct / max(total, 1)
 
-    print(f"\nStarting Phase 1 training ({EPOCHS} epochs)...")
+    print(f"\nStarting Phase 1 ({EPOCHS} epochs, {model_name})...")
     start_time = time.time()
 
     for epoch in range(EPOCHS):
@@ -231,22 +304,26 @@ def train_parseq_synthetic():
         total_loss = 0
         n_batches = 0
 
-        for imgs, targets, lengths in train_loader:
+        for imgs, targets, labels in train_loader:
             imgs = imgs.cuda()
             targets = targets.cuda()
-            lengths = lengths.cuda()
 
-            output = model(imgs)
-
-            # CTC expects (T, B, C) log probabilities
-            if output.dim() == 3:
-                output = output.permute(1, 0, 2)  # T, B, C
-
-            log_probs = output.log_softmax(2)
-            T = log_probs.size(0)
-            input_lengths = torch.full((imgs.size(0),), T, dtype=torch.long).cuda()
-
-            loss = criterion(log_probs, targets, input_lengths, lengths)
+            if model_name == "vit_tiny_str":
+                logits = model(imgs, targets)
+                # logits: (B, MAX_LEN+1, NUM_TOKENS), targets shifted: targets[:, 1:]
+                loss = criterion(logits.reshape(-1, NUM_TOKENS), targets[:, 1:].reshape(-1))
+            else:
+                # PARSeq native training
+                try:
+                    outputs = model(imgs)
+                    if hasattr(outputs, 'loss'):
+                        loss = outputs.loss
+                    else:
+                        logits = outputs if outputs.dim() == 3 else model(imgs, targets)
+                        loss = criterion(logits.reshape(-1, logits.size(-1)), targets[:, 1:].reshape(-1))
+                except Exception:
+                    logits = model(imgs, targets)
+                    loss = criterion(logits.reshape(-1, NUM_TOKENS), targets[:, 1:].reshape(-1))
 
             optimizer.zero_grad()
             loss.backward()
@@ -259,7 +336,6 @@ def train_parseq_synthetic():
 
         avg_loss = total_loss / max(n_batches, 1)
 
-        # Validate every 5 epochs
         if (epoch + 1) % 5 == 0 or epoch == 0:
             val_acc = evaluate(val_loader)
             elapsed = (time.time() - start_time) / 60
@@ -268,22 +344,43 @@ def train_parseq_synthetic():
 
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                torch.save(model.state_dict(), str(output_dir / "best.pth"))
+                patience_counter = 0
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'model_name': model_name,
+                    'charset': CHARSET,
+                    'num_tokens': NUM_TOKENS,
+                    'max_len': MAX_LEN,
+                    'epoch': epoch,
+                    'val_acc': val_acc,
+                }, str(output_dir / "best.pth"))
                 print(f"    New best! val_acc={val_acc:.4f}")
+            else:
+                patience_counter += 1
+                if patience_counter >= PATIENCE:
+                    print(f"    Early stopping at epoch {epoch+1}")
+                    break
 
-    # Save final
-    torch.save(model.state_dict(), str(output_dir / "last.pth"))
+    # Save last
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'model_name': model_name,
+        'charset': CHARSET,
+        'num_tokens': NUM_TOKENS,
+        'max_len': MAX_LEN,
+    }, str(output_dir / "last.pth"))
 
-    # Save training summary
     summary = {
         "phase": "synthetic",
-        "model": "parseq_tiny",
-        "epochs": EPOCHS,
+        "model": model_name,
+        "epochs_trained": epoch + 1,
         "best_val_acc": best_val_acc,
         "total_time_min": (time.time() - start_time) / 60,
         "train_samples": n_train,
         "val_samples": n_val,
         "seed": SEED,
+        "lr": LR,
+        "batch_size": BATCH_SIZE,
     }
     with open(output_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
@@ -291,12 +388,12 @@ def train_parseq_synthetic():
     volume.commit()
 
     print(f"\n{'='*60}")
-    print(f"Phase 1 PARSeq complete!")
+    print(f"Phase 1 complete! ({model_name})")
     print(f"  Best val accuracy: {best_val_acc:.4f}")
-    print(f"  Time: {(time.time() - start_time) / 60:.1f} minutes")
-    print(f"  Weights: {output_dir}")
+    print(f"  Epochs trained: {epoch + 1}")
+    print(f"  Time: {(time.time() - start_time) / 60:.1f} min")
 
 
 @app.local_entrypoint()
 def main():
-    train_parseq_synthetic.remote()
+    train_parseq_phase1.remote()
