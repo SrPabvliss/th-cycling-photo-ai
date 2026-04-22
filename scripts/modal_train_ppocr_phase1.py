@@ -17,18 +17,21 @@ app = modal.App("ocr-phase1-ppocr")
 volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=True)
 
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry("nvcr.io/nvidia/cuda:12.0.1-cudnn8-devel-ubuntu22.04", add_python="3.11")
     .apt_install("libgl1-mesa-glx", "libglib2.0-0", "git")
+    .run_commands(
+        # PaddlePaddle GPU with CUDA 12 + cuDNN
+        "pip install paddlepaddle-gpu==2.6.1.post120 -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html",
+    )
     .pip_install(
-        "paddlepaddle-gpu>=3.0.0",
-        "paddleocr>=2.9.0",
         "lmdb>=1.4.0",
         "pillow>=10.4.0",
         "numpy>=1.26.0",
         "opencv-python-headless>=4.9.0",
     )
     .run_commands(
-        "pip install 'git+https://github.com/PaddlePaddle/PaddleOCR.git@main'",
+        "git clone --depth 1 https://github.com/PaddlePaddle/PaddleOCR.git /opt/PaddleOCR",
+        "cd /opt/PaddleOCR && pip install -r requirements.txt",
     )
 )
 
@@ -222,11 +225,11 @@ Train:
             - label_sar
             - length
             - valid_ratio
-    loader:
-      shuffle: true
-      batch_size_per_card: 128
-      drop_last: true
-      num_workers: 4
+  loader:
+    shuffle: true
+    batch_size_per_card: 128
+    drop_last: true
+    num_workers: 4
 
 Eval:
   dataset:
@@ -248,79 +251,92 @@ Eval:
             - label_sar
             - length
             - valid_ratio
-    loader:
-      shuffle: false
-      drop_last: false
-      batch_size_per_card: 128
-      num_workers: 2
+  loader:
+    shuffle: false
+    drop_last: false
+    batch_size_per_card: 128
+    num_workers: 2
 """
     config_path = output_dir / "config.yml"
     with open(config_path, "w") as f:
         f.write(config_content)
 
-    # ---- 4. Train ----
+    # ---- 4. Train using cloned PaddleOCR repo ----
     print("\nStarting PP-OCR training...")
     start_time = time.time()
 
+    import sys
     import subprocess
+
+    # Add PaddleOCR to path
+    PPOCR_DIR = "/opt/PaddleOCR"
+    sys.path.insert(0, PPOCR_DIR)
+
     result = subprocess.run(
         [
-            "python", "-m", "tools.train",
+            sys.executable,
+            f"{PPOCR_DIR}/tools/train.py",
             "-c", str(config_path),
         ],
-        cwd="/usr/local/lib/python3.11/site-packages/paddleocr",
-        capture_output=False,
+        cwd=PPOCR_DIR,
+        capture_output=True,
+        text=True,
         timeout=14000,
     )
 
     elapsed = (time.time() - start_time) / 60
 
-    # If PaddleOCR tools.train doesn't work directly, try alternative
+    # Print output
+    if result.stdout:
+        # Print last 50 lines
+        lines = result.stdout.strip().split("\n")
+        for line in lines[-50:]:
+            print(f"  {line}")
+
     if result.returncode != 0:
-        print(f"  PaddleOCR tools.train failed (exit {result.returncode})")
-        print("  Trying alternative: paddleocr CLI...")
+        print(f"\n  PP-OCR training failed (exit {result.returncode})")
+        if result.stderr:
+            stderr_lines = result.stderr.strip().split("\n")
+            for line in stderr_lines[-20:]:
+                print(f"  STDERR: {line}")
 
-        # Alternative: use PaddleOCR Python API
-        try:
-            import paddle
-            from ppocr.modeling.architectures import build_model
-            from ppocr.utils.save_load import load_model
-
-            print(f"  PaddlePaddle version: {paddle.__version__}")
-            print(f"  GPU available: {paddle.device.is_compiled_with_cuda()}")
-
-            # Save what we have
-            summary = {
-                "phase": "synthetic",
-                "model": "ppocr_mobile",
-                "status": "training_api_issue",
-                "total_time_min": elapsed,
-                "error": "PaddleOCR training pipeline needs investigation",
-            }
-            with open(output_dir / "summary.json", "w") as f:
-                json.dump(summary, f, indent=2)
-
-        except Exception as e:
-            print(f"  PaddlePaddle import error: {e}")
-            summary = {
-                "phase": "synthetic",
-                "model": "ppocr_mobile",
-                "status": "failed",
-                "error": str(e),
-            }
-            with open(output_dir / "summary.json", "w") as f:
-                json.dump(summary, f, indent=2)
+        summary = {
+            "phase": "synthetic",
+            "model": "ppocr_mobile",
+            "status": "failed",
+            "total_time_min": elapsed,
+            "error": result.stderr[-500:] if result.stderr else "unknown",
+        }
     else:
-        print(f"\nPP-OCR training complete! Time: {elapsed:.1f} min")
+        print(f"\n  PP-OCR training complete! Time: {elapsed:.1f} min")
+
+        # Find best model accuracy from logs
+        best_acc = 0.0
+        if result.stdout:
+            for line in result.stdout.split("\n"):
+                if "best_acc" in line.lower() or "acc:" in line.lower():
+                    # Try to extract accuracy
+                    import re
+                    match = re.search(r'acc[:\s]+([0-9.]+)', line, re.IGNORECASE)
+                    if match:
+                        try:
+                            acc = float(match.group(1))
+                            if acc > best_acc:
+                                best_acc = acc
+                        except ValueError:
+                            pass
+
         summary = {
             "phase": "synthetic",
             "model": "ppocr_mobile",
             "status": "completed",
             "total_time_min": elapsed,
+            "best_acc": best_acc,
             "seed": SEED,
         }
-        with open(output_dir / "summary.json", "w") as f:
-            json.dump(summary, f, indent=2)
+
+    with open(output_dir / "summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
 
     volume.commit()
     print(f"Results saved to volume")
