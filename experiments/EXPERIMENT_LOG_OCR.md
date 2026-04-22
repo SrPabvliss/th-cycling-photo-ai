@@ -177,8 +177,40 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** ViT-tiny CTC funciona. Fine-tune (Phase 3) será el test definitivo.
 
-### Run 4 — SVTR_LCNet Phase 2 (SVHN)
-(pendiente)
+### Run 4 — SVTR_LCNet Phase 2 (SVHN) ✅
+- **Fecha:** 2026-04-22
+- **GPU:** NVIDIA A10G (Modal)
+- **Dataset:** SVHN 235K (224K train / 12K val)
+- **Architecture:** SVTR_LCNet (0.3M params)
+- **Phase 1 weights:** loaded successfully (val_acc=0.690)
+- **Epochs:** 30
+- **LR:** 5e-4 (OneCycleLR)
+- **Batch:** 128
+- **Training time:** 25.1 minutes
+
+| Métrica | Phase 1 (synthetic) | Phase 2 (SVHN) | Δ |
+|---|---|---|---|
+| Best val accuracy | 0.690 | **0.860** | **+17.0pp** |
+
+**Training curve:**
+- Epoch 1: 0.178 → Epoch 5: 0.800 → Epoch 10: 0.853 → Epoch 20: 0.860 → Epoch 30: 0.860
+- Plateau at epoch 20 — converged
+
+**Phase 2 comparison:**
+
+| Model | Params | SVHN Val Acc | Time |
+|---|---|---|---|
+| ViT-tiny CTC | 5.5M | **86.6%** | 21.6 min |
+| SVTR_LCNet | 0.3M | 86.0% | 25.1 min |
+
+**Observaciones:**
+- Ambos modelos ~86% en SVHN — diferencia <1pp, estadísticamente insignificante
+- SVTR cargó Phase 1 weights correctamente (key mapping fix)
+- SVTR convergió a epoch 20, ViT aún mejorando a epoch 30
+- SVHN validó que real digits >> synthetic (+17-18pp para ambos)
+- Fine-tune en bibs reales (284 train) será la prueba definitiva
+
+**Decisión:** Proceder con Phase 3 (fine-tune). Ambos modelos entran en igualdad de condiciones.
 
 ### Run 5 — ViT-tiny STR Fine-tune (5 seeds)
 (pendiente)
