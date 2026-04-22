@@ -60,8 +60,7 @@ def write_lmdb_split(output_path: Path, samples: list[dict]):
             img_path = CROPS_DIR / sample["crop_file"]
             img = Image.open(img_path).convert("RGB")
 
-            # Resize to 32x128 (H x W) — PARSeq default
-            img = img.resize((128, 32), Image.LANCZOS)
+            # Store at original resolution — model loader handles resize/padding
 
             buf = io.BytesIO()
             img.save(buf, format="PNG")

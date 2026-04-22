@@ -15,7 +15,7 @@ from pathlib import Path
 import cv2
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-COCO_DIR = PROJECT_ROOT / "data" / "ocr" / "clean_v9"
+COCO_DIR = PROJECT_ROOT / "data" / "ocr" / "clean_v10"
 OUTPUT_DIR = PROJECT_ROOT / "data" / "ocr" / "crops"
 METADATA_CSV = OUTPUT_DIR / "crops_metadata.csv"
 
