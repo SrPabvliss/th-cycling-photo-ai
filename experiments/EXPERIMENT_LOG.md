@@ -241,8 +241,40 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 
 **Decisión:** Copy-paste descartado para RF-DETR. Run 4 (baseline) confirmado como modelo de producción.
 
-### Run 6 — Ganador + SAHI
-(pendiente)
+### Run 6 — RF-DETR-M + SAHI (Slicing Aided Hyper Inference) ✅
+- **Fecha:** 2026-04-22
+- **Config:** Run 4 weights + manual tiling (full image + overlapping tiles + NMS merge)
+- **Dataset:** v1 COCO format, 6 clases, validation set (198 imgs)
+- **GPU:** NVIDIA A10G (Modal)
+- **Hipótesis:** Tiled inference mejora AP en objetos pequeños (competidor_number, helmet)
+
+| Config | mAP@0.5 | mAP@0.5:0.95 | AP small | ms/img |
+|---|---|---|---|---|
+| **baseline** | **0.956** | **0.755** | 0.469 | 145 |
+| sahi_512_02 | 0.966 | 0.735 | **0.508** | 145 |
+| sahi_384_03 | 0.830 | 0.498 | 0.489 | 132 |
+| sahi_320_03 | 0.787 | 0.454 | 0.464 | 233 |
+
+**Per-class AP@0.5 comparison:**
+
+| Clase | baseline | sahi_512 | sahi_384 | sahi_320 |
+|---|---|---|---|---|
+| bicycle | 0.990 | 0.999 | 0.829 | 0.831 |
+| competidor_number | 0.921 | **0.957** | 0.926 | 0.902 |
+| cyclist | 0.990 | 0.990 | 0.843 | 0.747 |
+| cyclist_clothes | 0.897 | 0.919 | 0.823 | 0.721 |
+| cyclist_with_bike | 0.995 | 0.995 | 0.633 | 0.614 |
+| helmet | 0.944 | 0.935 | 0.923 | 0.908 |
+
+**Observaciones:**
+- SAHI **daña** a RF-DETR — tiles más pequeños = peor rendimiento
+- 384 y 320: colapso catastrófico, especialmente cyclist_with_bike (0.995→0.633)
+- 512 tiles: mAP@0.5 +1pp marginal, pero mAP@0.5:0.95 -2pp (NMS noise en bbox coords)
+- competidor_number mejoró con 512 (0.921→0.957) pero a costa de mAP general
+- DINOv2 transformer ya maneja multi-escala internamente — tiling destruye contexto espacial
+- SAHI diseñado para modelos anchor-based (YOLO), no transformers
+
+**Decisión:** SAHI descartado. Run 4 (baseline sin tiling) confirmado definitivamente como modelo de producción.
 
 ---
 
@@ -261,6 +293,7 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | 2026-04-21 | RF-DETR resolution custom no funciona | Pretrained weights incompatibles con resolution≠default, usar default (576) |
 | 2026-04-21 | **RF-DETR-M = modelo producción** | mAP@0.5=0.954 > YOLO 0.904 (+5pp), Apache 2.0, supera targets |
 | 2026-04-21 | Copy-paste no mejora RF-DETR | Run 5 (CP) mAP=0.946 < Run 4 (sin CP) 0.954. Crops artificiales confunden transformer |
+| 2026-04-22 | SAHI no mejora RF-DETR | Tiling destruye contexto espacial del transformer. 512 tiles: +1pp mAP@0.5 pero -2pp mAP@0.5:0.95 |
 
 ## Resumen comparativo final
 
@@ -271,3 +304,4 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | Run 1c | YOLO11m | 6 | baseline | 0.904 | 0.726 | Best YOLO |
 | **Run 4** | **RF-DETR-M** | **6** | **baseline** | **0.954** | **0.752** | **⭐ PRODUCCIÓN** |
 | Run 5 | RF-DETR-M | 6 | copy-paste | 0.946 | 0.743 | |
+| Run 6 | RF-DETR-M | 6 | SAHI 512 | 0.966 | 0.735 | mAP@0.5:0.95 peor |
