@@ -1,0 +1,13 @@
+type: ppocr
+name: ppocr_phase2_svhn
+seed: 42
+phase: svhn
+charset: "0123456789"
+max_text_length: 4
+epochs: 30
+batch_size: 128
+lr: 5.0e-4
+img_size: [48, 192]
+pretrained_weights: experiments/ppocr_phase1_synthetic/best.pth
+dataset_dir: data/ocr/svhn
+project: experiments

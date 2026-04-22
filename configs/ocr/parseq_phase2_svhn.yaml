@@ -1,0 +1,14 @@
+type: parseq
+name: parseq_phase2_svhn
+seed: 42
+phase: svhn
+charset: "0123456789"
+max_label_length: 4
+epochs: 30
+batch_size: 128
+lr: 3.5e-4
+weight_decay: 0.0
+img_size: [32, 128]
+pretrained_weights: experiments/parseq_phase1_synthetic/best.pth
+dataset_dir: data/ocr/svhn/lmdb
+project: experiments

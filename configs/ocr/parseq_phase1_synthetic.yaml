@@ -1,0 +1,14 @@
+type: parseq
+name: parseq_phase1_synthetic
+seed: 42
+phase: synthetic
+charset: "0123456789"
+max_label_length: 4
+epochs: 50
+batch_size: 128
+lr: 7.0e-4
+weight_decay: 0.0
+img_size: [32, 128]
+pretrained_weights: null
+dataset_dir: data/ocr/synthetic/lmdb
+project: experiments

@@ -1,0 +1,14 @@
+type: parseq
+name: parseq_phase3_finetune
+seed: 42
+phase: finetune
+charset: "0123456789"
+max_label_length: 4
+epochs: 50
+batch_size: 32
+lr: 7.0e-5
+weight_decay: 1.0e-4
+img_size: [32, 128]
+pretrained_weights: experiments/parseq_phase2_svhn/best.pth
+dataset_dir: data/ocr/dataset/fold_0/train/lmdb
+project: experiments
