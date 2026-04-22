@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 
-from cycling_photo_ai.inference.ports import Detection
+from cycling_photo_ai.detection.inference.ports import Detection
 from cycling_photo_ai.shared.paths import WEIGHTS_DIR
 
 

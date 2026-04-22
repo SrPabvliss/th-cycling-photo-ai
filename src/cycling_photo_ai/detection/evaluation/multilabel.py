@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.metrics import f1_score, hamming_loss, matthews_corrcoef
 
-from cycling_photo_ai.evaluation.ports import EvaluationResult
+from cycling_photo_ai.detection.evaluation.ports import EvaluationResult
 
 
 CLASS_NAMES = ["cyclist", "helmet", "bicycle", "cyclist_clothes", "competidor_number"]

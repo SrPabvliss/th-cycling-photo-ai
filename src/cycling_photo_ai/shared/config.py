@@ -88,6 +88,57 @@ class EvaluationConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# OCR training configs
+# ---------------------------------------------------------------------------
+
+
+class ParseqTrainingConfig(BaseModel):
+    """Configuration for a PARSeq-tiny training run."""
+
+    name: str = Field(description="Run identifier, e.g. 'parseq_synthetic'")
+    seed: int = 42
+    phase: str = Field(description="Training phase: synthetic, svhn, finetune")
+    charset: str = "0123456789"
+    max_label_length: int = 4
+    epochs: int = 50
+    batch_size: int = 128
+    lr: float = 7e-4
+    weight_decay: float = 0.0
+    img_size: tuple[int, int] = (32, 128)
+    pretrained_weights: str | None = None
+    dataset_dir: str = Field(description="Path to LMDB dataset directory")
+    project: str = "experiments"
+
+
+class PpOcrTrainingConfig(BaseModel):
+    """Configuration for a PP-OCRv5 mobile training run."""
+
+    name: str = Field(description="Run identifier, e.g. 'ppocr_synthetic'")
+    seed: int = 42
+    phase: str = Field(description="Training phase: synthetic, svhn, finetune")
+    charset: str = "0123456789"
+    max_text_length: int = 4
+    epochs: int = 50
+    batch_size: int = 128
+    lr: float = 1e-3
+    img_size: tuple[int, int] = (48, 192)
+    pretrained_weights: str | None = None
+    dataset_dir: str = Field(description="Path to dataset directory")
+    project: str = "experiments"
+
+
+class OcrEvaluationConfig(BaseModel):
+    """Configuration for the OCR 10-step evaluation protocol."""
+
+    test_dir: str = Field(description="Path to test set directory")
+    bootstrap_iterations: int = 10_000
+    seeds: list[int] = Field(default=[42, 123, 2024, 7, 1337])
+    coverage_levels: list[float] = Field(default=[1.0, 0.80, 0.60])
+    alpha: float = 0.05
+    n_calibration_bins: int = 10
+
+
+# ---------------------------------------------------------------------------
 # Inference config
 # ---------------------------------------------------------------------------
 
@@ -103,6 +154,20 @@ class InferenceConfig(BaseModel):
     confidence_threshold: float = 0.25
 
 
+class PipelineConfig(BaseModel):
+    """Configuration for the unified pipeline service."""
+
+    host: str = "0.0.0.0"
+    port: int = 8001
+    detector_weights: str = Field(description="Path to RF-DETR weights")
+    ocr_weights: str | None = None
+    ocr_model: str = "parseq"  # parseq | ppocr
+    confidence_threshold: float = 0.25
+    ocr_confidence_threshold: float = 0.70
+    bib_padding_ratio: float = 0.12
+    temperature: float = 1.0  # calibrated temperature scalar
+
+
 # ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
@@ -112,6 +177,10 @@ CONFIG_TYPES: dict[str, type[BaseModel]] = {
     "rfdetr": RfdetrTrainingConfig,
     "evaluation": EvaluationConfig,
     "inference": InferenceConfig,
+    "parseq": ParseqTrainingConfig,
+    "ppocr": PpOcrTrainingConfig,
+    "ocr_evaluation": OcrEvaluationConfig,
+    "pipeline": PipelineConfig,
 }
 
 

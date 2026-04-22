@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cycling_photo_ai.evaluation.ports import EvaluationResult
+from cycling_photo_ai.detection.evaluation.ports import EvaluationResult
 
 
 class CocoEvaluator:

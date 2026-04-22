@@ -9,7 +9,7 @@ from pathlib import Path
 
 from cycling_photo_ai.shared.config import RfdetrTrainingConfig
 from cycling_photo_ai.shared.reproducibility import set_seed, sha256_file
-from cycling_photo_ai.training.ports import TrainingResult
+from cycling_photo_ai.detection.training.ports import TrainingResult
 
 
 class RfdetrTrainer:

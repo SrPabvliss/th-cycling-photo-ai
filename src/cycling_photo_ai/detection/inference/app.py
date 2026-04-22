@@ -14,8 +14,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from cycling_photo_ai.inference.ports import IDetector
-from cycling_photo_ai.inference.schemas import (
+from cycling_photo_ai.detection.inference.ports import IDetector
+from cycling_photo_ai.detection.inference.schemas import (
     DetectionItem,
     DetectionRequest,
     DetectionResponse,
@@ -49,14 +49,14 @@ def _get_or_load_detector(model_key: str) -> IDetector:
         return _models[model_key]
 
     if model_key == "yolo11m":
-        from cycling_photo_ai.inference.yolo_detector import YoloDetector
+        from cycling_photo_ai.detection.inference.yolo_detector import YoloDetector
 
         detector = YoloDetector()
         _models[model_key] = detector
         return detector
 
     if model_key == "rfdetr":
-        from cycling_photo_ai.inference.rfdetr_detector import RfdetrDetector
+        from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
 
         detector = RfdetrDetector()
         _models[model_key] = detector
