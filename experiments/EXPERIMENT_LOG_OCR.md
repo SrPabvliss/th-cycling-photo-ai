@@ -113,8 +113,39 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** Adoptar ViT-tiny STR como modelo candidato 1 (reemplaza PARSeq-tiny). Arquitectura comparable: ViT encoder + attention decoder, ~5.6M params, PyTorch nativo.
 
-### Run 2 — PP-OCRv5 Phase 1 (Synthetic)
-(pendiente)
+### Run 2 — SVTR_LCNet Phase 1 (Synthetic) ✅
+- **Fecha:** 2026-04-22
+- **GPU:** NVIDIA A10G (Modal)
+- **Dataset:** 200K synthetic (190K train / 10K val)
+- **Architecture:** SVTR_LCNet (0.3M params) — MobileNetV1Enhance + SVTR transformer neck + CTC head
+- **Note:** PyTorch reimplementation of PP-OCRv5 mobile (PaddlePaddle segfaults on Modal + Colab)
+- **Epochs:** 50
+- **LR:** 1e-3 (OneCycleLR)
+- **Batch:** 128
+- **Training time:** 50 minutes
+
+| Métrica | Valor |
+|---|---|
+| Best val accuracy | **0.690** |
+
+**Training curve:**
+- Epoch 1: 0.009 → Epoch 5: 0.572 → Epoch 10: 0.658 → Epoch 30: 0.685 → Epoch 50: 0.690
+- Still improving at epoch 50, no early stop
+
+**Phase 1 comparison:**
+
+| Model | Params | Val Acc | Time |
+|---|---|---|---|
+| ViT-tiny STR | 5.6M | 68.4% | 26 min |
+| SVTR_LCNet | 0.3M | 69.0% | 50 min |
+
+**Observaciones:**
+- SVTR_LCNet logra misma accuracy con 18x menos parámetros — eficiente para producción
+- ViT-tiny entrenó más rápido gracias a pretrained ImageNet backbone
+- Ambos modelos ~69% en synthetic — techo de la distribución sintética
+- Phase 2 (SVHN con dígitos reales) debería romper este plateau
+
+**Decisión:** Ambos modelos viables. Proceder con Phase 2 (SVHN) para ambos.
 
 ### Run 3 — PARSeq-tiny Phase 2 (SVHN)
 (pendiente)
