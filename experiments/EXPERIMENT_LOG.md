@@ -204,8 +204,42 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 
 **Decisión:** RF-DETR-M es el modelo de producción. Per ADR-007: diferencia >3pp → gana mayor mAP. RF-DETR gana por +5pp Y tiene mejor licencia.
 
-### Run 5 — RF-DETR-M + Copy-Paste
-(pendiente)
+### Run 5 — RF-DETR-M + Copy-Paste (6 clases) ✅
+- **Fecha:** 2026-04-21
+- **Config:** rfdetr_copypaste, default resolution (576), batch=4, grad_accum=4
+- **Dataset:** v1 COCO format, 6 clases + copy-paste 3x competidor_number
+- **GPU:** NVIDIA A10G (Modal)
+- **Arch:** RF-DETR-Medium (DINOv2 backbone, Apache 2.0)
+- **Hipótesis:** Copy-paste de competidor_number mejora recall de placas
+
+| Métrica | Run 5 (CP) | Run 4 (sin CP) | Δ |
+|---|---|---|---|
+| mAP@0.5 | 0.946 | 0.954 | **-0.8pp** ❌ |
+| mAP@0.5:0.95 | 0.743 | 0.752 | -0.9pp |
+| mAP@0.75 | 0.831 | 0.836 | -0.5pp |
+
+**COCO detailed:**
+- AP small: 0.437 | AP medium: 0.711 | AP large: 0.855
+- AR@100: 0.785
+
+**Per-class AP@0.5:**
+
+| Clase | Run 5 (CP) | Run 4 (sin CP) | Δ |
+|---|---|---|---|
+| bicycle | 1.000 | 0.980 | +2.0pp |
+| competidor_number | 0.864 | 0.914 | **-5.0pp** ❌ |
+| cyclist | 0.990 | 0.990 | 0.0pp |
+| cyclist_clothes | 0.887 | 0.898 | -1.1pp |
+| cyclist_with_bike | 0.995 | 0.995 | 0.0pp |
+| helmet | 0.943 | 0.945 | -0.2pp |
+
+**Observaciones:**
+- Copy-paste **empeoró** competidor_number (-5pp) — exactamente lo opuesto a la hipótesis
+- Crops artificiales pegados sin contexto confunden al transformer (DINOv2 aprende relaciones espaciales)
+- Global mAP bajó en todas las métricas — copy-paste no es compatible con RF-DETR
+- bicycle subió a 1.000 pero es ruido estadístico en muestra pequeña
+
+**Decisión:** Copy-paste descartado para RF-DETR. Run 4 (baseline) confirmado como modelo de producción.
 
 ### Run 6 — Ganador + SAHI
 (pendiente)
