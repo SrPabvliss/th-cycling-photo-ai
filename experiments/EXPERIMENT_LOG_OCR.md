@@ -149,8 +149,33 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** Ambos modelos viables. Proceder con Phase 2 (SVHN) para ambos.
 
-### Run 3 — ViT-tiny STR Phase 2 (SVHN)
-(pendiente)
+### Run 3 — ViT-tiny CTC Phase 2 (SVHN) ✅
+- **Fecha:** 2026-04-22
+- **GPU:** NVIDIA A10G (Modal)
+- **Dataset:** SVHN 235K (224K train / 12K val)
+- **Architecture:** ViT-tiny CTC (5.5M params) — ViT encoder + CTC head (simplified from autoregressive Phase 1)
+- **Phase 1 weights:** incompatible (head size 13 vs 11) → used ImageNet pretrained backbone
+- **Epochs:** 30
+- **LR:** 3.5e-4 (OneCycleLR)
+- **Batch:** 128
+- **Training time:** 21.6 minutes
+
+| Métrica | Phase 1 (synthetic) | Phase 2 (SVHN) | Δ |
+|---|---|---|---|
+| Best val accuracy | 0.684 | **0.866** | **+18.2pp** |
+
+**Training curve:**
+- Epoch 1: 0.615 → Epoch 5: 0.788 → Epoch 15: 0.849 → Epoch 25: 0.857 → Epoch 30: 0.866
+- Consistent improvement, no plateau yet
+
+**Observaciones:**
+- Salto masivo +18pp — SVHN con dígitos reales es muchísimo mejor que synthetic
+- Phase 1 weights no cargaron (head size mismatch: autoregressive 13 tokens vs CTC 11 classes)
+- Entrenó desde ImageNet pretrained, aún así convergió rápido (61.5% en epoch 1)
+- 86.6% en SVHN val — prometedor, fine-tune en bibs reales debería acercar a 95%+
+- Modelo cambió de autoregressive a CTC para compatibilidad con pipeline SVTR
+
+**Decisión:** ViT-tiny CTC funciona. Fine-tune (Phase 3) será el test definitivo.
 
 ### Run 4 — SVTR_LCNet Phase 2 (SVHN)
 (pendiente)

@@ -316,7 +316,16 @@ def train_phase2():
 
     print(f"  Params: {sum(p.numel() for p in vit_model.parameters()) / 1e6:.1f}M")
 
-    vit_acc = train_model(vit_model, "vit_tiny_ctc", 32, 128, lr=3.5e-4, epochs=30, output_dir_name="ocr_phase2_vit")
+    # Skip if already trained
+    vit_done = (Path(VOLUME_PATH) / "experiments" / "ocr_phase2_vit" / "best.pth").exists()
+    if vit_done:
+        import json
+        with open(Path(VOLUME_PATH) / "experiments" / "ocr_phase2_vit" / "summary.json") as f:
+            s = json.load(f)
+        vit_acc = s["best_val_acc"]
+        print(f"  Already trained! best_val_acc={vit_acc:.4f} — skipping")
+    else:
+        vit_acc = train_model(vit_model, "vit_tiny_ctc", 32, 128, lr=3.5e-4, epochs=30, output_dir_name="ocr_phase2_vit")
 
     volume.commit()
 
@@ -388,7 +397,13 @@ def train_phase2():
     p1_svtr = Path(VOLUME_PATH) / "experiments" / "ocr_phase1_svtr" / "best.pth"
     if p1_svtr.exists():
         checkpoint = torch.load(str(p1_svtr), map_location="cpu")
-        svtr_model.load_state_dict(checkpoint['model_state_dict'])
+        # Phase 1 used different layer names — map them
+        state = checkpoint['model_state_dict']
+        mapped = {}
+        for k, v in state.items():
+            new_k = k.replace("svtr_proj_in.", "svtr_in.").replace("svtr_blocks.", "svtr.").replace("svtr_proj_out.", "svtr_out.")
+            mapped[new_k] = v
+        svtr_model.load_state_dict(mapped, strict=False)
         print(f"  Loaded Phase 1 weights (val_acc={checkpoint.get('val_acc', '?')})")
     else:
         print("  No Phase 1 weights, training from scratch")
