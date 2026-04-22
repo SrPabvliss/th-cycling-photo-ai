@@ -77,13 +77,25 @@ def train_phase3():
     char_to_idx = {c: i + 1 for i, c in enumerate(CHARSET)}
     idx_to_char = {i + 1: c for i, c in enumerate(CHARSET)}
 
+    # ---- Augmentation for small dataset ----
+    import torchvision.transforms as T
+
+    train_augment = T.Compose([
+        T.RandomAffine(degrees=8, translate=(0.05, 0.05), scale=(0.9, 1.1), shear=5),
+        T.RandomPerspective(distortion_scale=0.1, p=0.3),
+        T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
+        T.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
+        T.RandomGrayscale(p=0.1),
+    ])
+
     # ---- Dataset ----
     class LmdbDataset(Dataset):
-        def __init__(self, path, img_h, img_w):
+        def __init__(self, path, img_h, img_w, augment=False):
             self.env = lmdb_lib.open(str(path), readonly=True, lock=False)
             with self.env.begin() as txn:
                 self.n = int(txn.get("num-samples".encode()).decode())
             self.img_h, self.img_w = img_h, img_w
+            self.augment = augment
 
         def __len__(self):
             return self.n
@@ -93,7 +105,24 @@ def train_phase3():
                 img_bytes = txn.get(f"image-{idx+1:09d}".encode())
                 label = txn.get(f"label-{idx+1:09d}".encode()).decode()
             img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-            img = img.resize((self.img_w, self.img_h), Image.LANCZOS)
+
+            # Preserve aspect ratio: resize height to target, pad width
+            w, h = img.size
+            target_h = self.img_h
+            scale = target_h / h
+            new_w = max(1, int(w * scale))
+            img = img.resize((min(new_w, self.img_w), target_h), Image.LANCZOS)
+
+            # Pad to target width (center-pad with gray)
+            if img.size[0] < self.img_w:
+                padded = Image.new("RGB", (self.img_w, target_h), (128, 128, 128))
+                offset = (self.img_w - img.size[0]) // 2
+                padded.paste(img, (offset, 0))
+                img = padded
+
+            if self.augment:
+                img = train_augment(img)
+
             arr = np.array(img, dtype=np.float32) / 255.0
             arr = (arr - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225]
             tensor = torch.from_numpy(arr).permute(2, 0, 1).float()
@@ -124,7 +153,7 @@ def train_phase3():
             results.append("".join(chars))
         return results
 
-    def train_and_eval(model, model_name, img_h, img_w, output_name, lr=7e-5, epochs=80):
+    def train_and_eval(model, model_name, img_h, img_w, output_name, lr=1e-5, epochs=120):
         random.seed(SEED)
         np.random.seed(SEED)
         torch.manual_seed(SEED)
@@ -134,16 +163,28 @@ def train_phase3():
         output_dir = Path(VOLUME_PATH) / "experiments" / output_name
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        train_ds = LmdbDataset(fold0_train, img_h, img_w)
-        val_ds = LmdbDataset(fold0_val, img_h, img_w)
+        train_ds = LmdbDataset(fold0_train, img_h, img_w, augment=True)
+        val_ds = LmdbDataset(fold0_val, img_h, img_w, augment=False)
 
-        # Small dataset → smaller batch, more epochs
-        train_loader = DataLoader(train_ds, batch_size=16, shuffle=True, num_workers=2, collate_fn=collate)
-        val_loader = DataLoader(val_ds, batch_size=16, shuffle=False, num_workers=1, collate_fn=collate)
+        train_loader = DataLoader(train_ds, batch_size=8, shuffle=True, num_workers=2, collate_fn=collate)
+        val_loader = DataLoader(val_ds, batch_size=8, shuffle=False, num_workers=1, collate_fn=collate)
 
         print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}")
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+        # Discriminative LR: backbone gets 10x lower LR than head
+        head_params = []
+        backbone_params = []
+        for name, param in model.named_parameters():
+            if 'head' in name:
+                head_params.append(param)
+            else:
+                backbone_params.append(param)
+
+        optimizer = torch.optim.AdamW([
+            {'params': backbone_params, 'lr': lr},
+            {'params': head_params, 'lr': lr * 10},
+        ], weight_decay=1e-4)
+
         criterion = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr / 10)
 
