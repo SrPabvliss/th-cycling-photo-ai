@@ -78,11 +78,14 @@ def train_trocr():
     processor = TrOCRProcessor.from_pretrained("microsoft/trocr-small-printed")
     model = VisionEncoderDecoderModel.from_pretrained("microsoft/trocr-small-printed")
 
-    # Configure for digit-only generation
-    model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
+    # Configure model + generation
     model.config.pad_token_id = processor.tokenizer.pad_token_id
+    model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
     model.config.eos_token_id = processor.tokenizer.sep_token_id
-    model.config.max_length = MAX_LEN + 2  # digits + special tokens
+    model.generation_config.max_length = MAX_LEN + 2
+    model.generation_config.pad_token_id = processor.tokenizer.pad_token_id
+    model.generation_config.eos_token_id = processor.tokenizer.sep_token_id
+    model.generation_config.decoder_start_token_id = processor.tokenizer.cls_token_id
 
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"  Params: {n_params:.1f}M")
@@ -175,11 +178,7 @@ def train_trocr():
                 pixel_values = pixel_values.cuda()
 
                 # Generate predictions
-                generated_ids = model.generate(
-                    pixel_values,
-                    max_length=MAX_LEN + 2,
-                    num_beams=1,  # greedy for speed
-                )
+                generated_ids = model.generate(pixel_values)
 
                 # Decode predictions
                 pred_texts = processor.batch_decode(generated_ids, skip_special_tokens=True)

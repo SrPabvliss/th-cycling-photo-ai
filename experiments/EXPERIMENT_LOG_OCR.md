@@ -212,16 +212,54 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** Proceder con Phase 3 (fine-tune). Ambos modelos entran en igualdad de condiciones.
 
-### Run 5 — ViT-tiny STR Fine-tune (5 seeds)
+### Run 5 — Custom models Fine-tune on full-res crops (FAILED)
+- **Fecha:** 2026-04-22
+- **Dataset:** 444 train / 112 val, full-res crops (avg 209×180px, Roboflow v10 sin resize)
+- **Previous attempts on 640×640 crops:** 0-17% EM (crops only 29×25px, illegible)
+
+| Approach | Input | Val EM | Issue |
+|---|---|---|---|
+| CTC (32×128, stretched) | 36×32→128×32 | 17% | 3.4x horizontal stretch |
+| CTC (padded) | 36×32→pad 128×32 | 1.4% | Mostly gray padding |
+| Multi-digit classifier (64×64) | 209×180→64×64 | 5.6% | Too small |
+| Multi-digit + spatial attn (224×224) | 209×180→224×224 | **33%** | Best custom, still insufficient |
+| EasyOCR pretrained (full-res) | native | 27% | Text detector misses many |
+
+**Root cause:** 444 training samples + ImageNet features ≠ sufficient for OCR. Models need text-specific pretraining.
+
+**Decisión:** Custom training from scratch inviable con <1000 muestras. Pivote a modelo preentrenado en texto.
+
+### Run 6 — TrOCR-small-printed Fine-tune ✅ ⭐ BEST OCR
+- **Fecha:** 2026-04-22
+- **GPU:** NVIDIA A10G (Modal)
+- **Dataset:** 444 train / 112 val, full-res crops (Roboflow v10)
+- **Architecture:** TrOCR-small-printed (61.6M params) — ViT encoder + GPT-2 decoder, pretrained on printed text
+- **LR:** encoder 5e-6, decoder 5e-5 (discriminative)
+- **Augmentation:** rotation ±8°, color jitter, Gaussian blur
+- **Batch:** 8
+- **Epochs:** 100 (best at epoch 85)
+- **Training time:** 14.5 minutes
+
+| Métrica | Valor |
+|---|---|
+| Best val EM | **0.884 (99/112)** |
+
+**Training curve:**
+- Epoch 1: 0.196 → Epoch 5: 0.679 → Epoch 15: 0.750 → Epoch 30: 0.821 → Epoch 55: 0.839 → Epoch 85: **0.884**
+
+**Observaciones:**
+- Salto masivo: 33% (mejor custom) → 88.4% (TrOCR pretrained) — **+55pp**
+- Convergencia rápida: 68% en solo 5 epochs — pretrained text features son la clave
+- 13 errores en 112 — con reject option a 80% coverage, EM debería superar 95%
+- Modelo más pesado (61.6M vs 0.3-11M custom) pero tolerable para CPX31
+- TrOCR-small, no TrOCR-large (ADR rechazó large por hallucinaciones, small funciona perfecto)
+
+**Decisión:** TrOCR-small-printed = modelo OCR de producción. Proceder con calibración + evaluación formal.
+
+### Run 7 — TrOCR Calibration (Temperature Scaling)
 (pendiente)
 
-### Run 6 — SVTR_LCNet Fine-tune (5 seeds)
-(pendiente)
-
-### Run 7 — Winner Calibration (Temperature Scaling)
-(pendiente)
-
-### Run 8 — Commercial version (without SVHN)
+### Run 8 — TrOCR 5-seed evaluation
 (pendiente)
 
 ---
@@ -241,6 +279,9 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-22 | CPX31 (8GB RAM) for deployment | Detection + OCR + future color won't fit in CPX21 (4GB). $11/mo more |
 | 2026-04-22 | ViT-tiny STR reemplaza PARSeq-tiny | PARSeq no instala en Modal (strhub config + torch.hub interactive). ViT-tiny STR: misma familia (ViT encoder + attn decoder), 5.6M params, PyTorch nativo |
 | 2026-04-22 | PP-OCRv5 → SVTR_LCNet en PyTorch | PaddlePaddle segfault en Modal Y Colab (CUDA/cuDNN mismatch). Reimplementación PyTorch de la misma arquitectura (MobileNetV1 + SVTR + CTC) |
+| 2026-04-22 | Full-res crops (v10 sin resize) | Roboflow 640×640 hacía bibs de 29×25px (ilegibles). Full-res: 209×180 avg. Labels: 655 (was 418), skips: 62 (was 285) |
+| 2026-04-22 | Custom training inviable (<1000 samples) | Best custom: 33% EM (spatial attention + 224×224). Modelos necesitan text-specific pretraining, no solo ImageNet |
+| 2026-04-22 | **TrOCR-small-printed = modelo OCR** | 88.4% EM con 444 train samples. Pretrained text features >> ImageNet. ADR rechazó TrOCR-large, small funciona perfecto |
 
 ---
 
