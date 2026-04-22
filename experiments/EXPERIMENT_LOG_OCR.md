@@ -86,27 +86,32 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 ## Runs
 
-### Run 1 — PARSeq-tiny Phase 1 (Synthetic) ✅
+### Run 1 — ViT-tiny STR Phase 1 (Synthetic) ✅
 - **Fecha:** 2026-04-22
 - **GPU:** NVIDIA A10G (Modal)
 - **Dataset:** 200K synthetic (190K train / 10K val)
-- **Architecture:** CRNN fallback (torch.hub PARSeq load failed — version mismatch)
+- **Architecture:** ViT-tiny STR (5.6M params) — ImageNet-pretrained ViT encoder + cross-attention decoder
 - **Epochs:** 50
 - **LR:** 7e-4 (OneCycleLR)
 - **Batch:** 128
-- **Training time:** 54 minutes
+- **Training time:** 26 minutes
 
 | Métrica | Valor |
 |---|---|
-| Best val accuracy | **0.698** |
+| Best val accuracy | **0.684** |
+
+**Training curve:**
+- Epoch 1: 0.338 → Epoch 5: 0.619 → Epoch 10: 0.633 → Epoch 30: 0.663 → Epoch 50: 0.684
+- Still improving at epoch 50 (no early stop triggered) — more epochs or Phase 2 will help
 
 **Observaciones:**
-- 69.8% en synthetic val — aceptable para Phase 1 (pretexto: aprender forma de dígitos)
-- torch.hub PARSeq-tiny falló por incompatibilidad de versión → cayó a CRNN fallback
-- TODO: investigar instalación correcta de PARSeq para Phase 2 o usar CRNN como baseline válido
-- La accuracy subirá significativamente con SVHN (Phase 2) y fine-tune (Phase 3)
+- PARSeq-tiny no cargó ni via strhub ni torch.hub (config not found + interactive prompt)
+- ViT-tiny STR como alternativa: pretrained ImageNet backbone + autoregressive decoder
+- 68.4% en synthetic val — aceptable para Phase 1 (objetivo: aprender representación de dígitos)
+- Primer intento con CRNN fallback dio 69.8% en 54min, ViT-tiny similar accuracy en menos tiempo
+- El modelo no saturó — Phase 2 (SVHN) debería mejorar significativamente
 
-**Decisión:** Proceder con Phase 2. Si CRNN alcanza targets con fine-tune, considerar como alternativa a PARSeq.
+**Decisión:** Adoptar ViT-tiny STR como modelo candidato 1 (reemplaza PARSeq-tiny). Arquitectura comparable: ViT encoder + attention decoder, ~5.6M params, PyTorch nativo.
 
 ### Run 2 — PP-OCRv5 Phase 1 (Synthetic)
 (pendiente)
@@ -144,6 +149,8 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-22 | 418 labeled / 285 skipped (41%) | Many crops too small or occluded; compensated with 200K synthetic pretraining |
 | 2026-04-22 | Custom synthetic generator (not TRDG) | More control over sport fonts, fabric backgrounds, and digit distribution matching real data |
 | 2026-04-22 | CPX31 (8GB RAM) for deployment | Detection + OCR + future color won't fit in CPX21 (4GB). $11/mo more |
+| 2026-04-22 | ViT-tiny STR reemplaza PARSeq-tiny | PARSeq no instala en Modal (strhub config + torch.hub interactive). ViT-tiny STR: misma familia (ViT encoder + attn decoder), 5.6M params, PyTorch nativo |
+| 2026-04-22 | PP-OCRv5 entrena en Colab (no Modal) | PaddlePaddle segfault en Modal por CUDA driver mismatch. Colab tiene PaddlePaddle nativo |
 
 ---
 
