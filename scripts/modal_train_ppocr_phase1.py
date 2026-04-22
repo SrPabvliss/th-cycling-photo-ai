@@ -1,42 +1,42 @@
 """
-Modal training script — PP-OCRv5 mobile Phase 1: Synthetic pretraining.
+Modal training script — SVTR_LCNet (PP-OCRv5 architecture) Phase 1: Synthetic.
 
-Uses PaddlePaddle + PaddleOCR recognition training pipeline.
+PyTorch reimplementation of PP-OCRv5 mobile recognition model.
+PaddlePaddle segfaults on both Modal and Colab — this is the PyTorch alternative.
 
 Usage:
     modal run --detach scripts/modal_train_ppocr_phase1.py
 
 Results saved to Modal Volume. Download with:
-    modal volume get cycling-photo-ai-vol experiments/ocr_phase1_ppocr ./experiments/
+    modal volume get cycling-photo-ai-vol experiments/ocr_phase1_svtr ./experiments/
 """
 
 import modal
 
-app = modal.App("ocr-phase1-ppocr")
+app = modal.App("ocr-phase1-svtr")
 
 volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=True)
 
 image = (
-    modal.Image.from_registry("nvcr.io/nvidia/cuda:12.0.1-cudnn8-devel-ubuntu22.04", add_python="3.11")
-    .apt_install("libgl1-mesa-glx", "libglib2.0-0", "git")
-    .run_commands(
-        # PaddlePaddle GPU with CUDA 12 + cuDNN
-        "pip install paddlepaddle-gpu==2.6.1.post120 -f https://www.paddlepaddle.org.cn/whl/linux/mkl/avx/stable.html",
-    )
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("libgl1-mesa-glx", "libglib2.0-0")
     .pip_install(
+        "torch>=2.1.0",
+        "torchvision>=0.16.0",
         "lmdb>=1.4.0",
         "pillow>=10.4.0",
         "numpy>=1.26.0",
-        "opencv-python-headless>=4.9.0",
-    )
-    .run_commands(
-        "git clone --depth 1 https://github.com/PaddlePaddle/PaddleOCR.git /opt/PaddleOCR",
-        "cd /opt/PaddleOCR && pip install -r requirements.txt",
     )
 )
 
 VOLUME_PATH = "/data"
 SEED = 42
+CHARSET = "0123456789"
+MAX_LEN = 4
+IMG_H, IMG_W = 48, 192  # PP-OCR default
+EPOCHS = 50
+BATCH_SIZE = 128
+LR = 1e-3
 
 
 @app.function(
@@ -45,303 +45,302 @@ SEED = 42
     timeout=14400,
     volumes={VOLUME_PATH: volume},
 )
-def train_ppocr_phase1():
+def train_svtr_phase1():
     import io
     import json
-    import os
     import random
     import time
     from pathlib import Path
 
     import lmdb as lmdb_lib
     import numpy as np
+    import torch
+    import torch.nn as nn
     from PIL import Image
+    from torch.utils.data import DataLoader, Dataset
 
     random.seed(SEED)
     np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.deterministic = True
 
-    print("PP-OCRv5 Phase 1 — Synthetic pretraining")
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    print(f"VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
 
     synth_lmdb = Path(VOLUME_PATH) / "ocr" / "synthetic" / "lmdb"
     if not synth_lmdb.exists():
-        print("ERROR: Synthetic data not found.")
+        print("ERROR: Synthetic data not found on volume.")
         return
 
-    output_dir = Path(VOLUME_PATH) / "experiments" / "ocr_phase1_ppocr"
+    output_dir = Path(VOLUME_PATH) / "experiments" / "ocr_phase1_svtr"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- 1. Convert LMDB to PaddleOCR format ----
-    # PaddleOCR needs: image_dir + label_file (path\ttext)
-    ppocr_dir = Path(VOLUME_PATH) / "ocr" / "synthetic" / "ppocr_format"
+    # ---- Charset ----
+    BLANK_IDX = 0  # CTC blank
+    char_to_idx = {c: i + 1 for i, c in enumerate(CHARSET)}
+    idx_to_char = {i + 1: c for i, c in enumerate(CHARSET)}
+    NUM_CLASSES = len(CHARSET) + 1  # +1 for CTC blank
 
-    if not (ppocr_dir / "train_label.txt").exists():
-        print("Converting LMDB to PaddleOCR format...")
-        imgs_dir = ppocr_dir / "images"
-        imgs_dir.mkdir(parents=True, exist_ok=True)
+    # ---- SVTR_LCNet model (PP-OCRv5 architecture in PyTorch) ----
+    class ConvBNReLU(nn.Module):
+        def __init__(self, in_ch, out_ch, ks, stride=1, padding=0, groups=1):
+            super().__init__()
+            self.conv = nn.Conv2d(in_ch, out_ch, ks, stride, padding, groups=groups, bias=False)
+            self.bn = nn.BatchNorm2d(out_ch)
+            self.relu = nn.ReLU(inplace=True)
+        def forward(self, x):
+            return self.relu(self.bn(self.conv(x)))
 
-        env = lmdb_lib.open(str(synth_lmdb), readonly=True, lock=False)
-        with env.begin() as txn:
-            n = int(txn.get("num-samples".encode()).decode())
+    class DepthwiseSeparable(nn.Module):
+        def __init__(self, in_ch, out_ch, stride=1):
+            super().__init__()
+            self.dw = ConvBNReLU(in_ch, in_ch, 3, stride, 1, groups=in_ch)
+            self.pw = ConvBNReLU(in_ch, out_ch, 1)
+        def forward(self, x):
+            return self.pw(self.dw(x))
 
-        labels = []
-        # Split: 95% train, 5% val
-        n_train = int(n * 0.95)
+    class SVTRBlock(nn.Module):
+        def __init__(self, dim, num_heads=4, mlp_ratio=4.0):
+            super().__init__()
+            self.norm1 = nn.LayerNorm(dim)
+            self.attn = nn.MultiheadAttention(dim, num_heads, batch_first=True)
+            self.norm2 = nn.LayerNorm(dim)
+            self.mlp = nn.Sequential(
+                nn.Linear(dim, int(dim * mlp_ratio)), nn.GELU(),
+                nn.Linear(int(dim * mlp_ratio), dim),
+            )
+        def forward(self, x):
+            r = x
+            x = self.norm1(x)
+            x, _ = self.attn(x, x, x)
+            x = x + r
+            r = x
+            x = self.norm2(x)
+            x = self.mlp(x) + r
+            return x
 
-        with env.begin() as txn:
-            for idx in range(n):
+    class SVTRLCNet(nn.Module):
+        def __init__(self, num_classes, scale=0.5, svtr_dims=64, svtr_depth=2):
+            super().__init__()
+            s = scale
+            self.cnn = nn.Sequential(
+                ConvBNReLU(3, int(32*s), 3, 2, 1),
+                DepthwiseSeparable(int(32*s), int(64*s)),
+                DepthwiseSeparable(int(64*s), int(128*s), stride=2),
+                DepthwiseSeparable(int(128*s), int(128*s)),
+                DepthwiseSeparable(int(128*s), int(256*s), stride=2),
+                DepthwiseSeparable(int(256*s), int(256*s)),
+                DepthwiseSeparable(int(256*s), int(512*s), stride=(1, 2)),
+                DepthwiseSeparable(int(512*s), int(512*s)),
+                DepthwiseSeparable(int(512*s), int(512*s)),
+            )
+            self.pool = nn.AdaptiveAvgPool2d((1, None))
+            cnn_out = int(512 * s)
+
+            self.svtr_proj_in = nn.Linear(cnn_out, svtr_dims)
+            self.svtr_blocks = nn.Sequential(*[SVTRBlock(svtr_dims) for _ in range(svtr_depth)])
+            self.svtr_proj_out = nn.Linear(svtr_dims, cnn_out)
+            self.svtr_norm = nn.LayerNorm(cnn_out)
+
+            self.head = nn.Linear(cnn_out, num_classes)
+
+        def forward(self, x):
+            x = self.cnn(x)
+            x = self.pool(x)       # (B, C, 1, W)
+            x = x.squeeze(2).permute(0, 2, 1)  # (B, W, C)
+
+            z = self.svtr_proj_in(x)
+            z = self.svtr_blocks(z)
+            z = self.svtr_proj_out(z)
+            x = self.svtr_norm(x + z)
+
+            return self.head(x)     # (B, W, num_classes)
+
+    model = SVTRLCNet(NUM_CLASSES)
+    n_params = sum(p.numel() for p in model.parameters()) / 1e6
+    print(f"SVTR_LCNet built: {n_params:.1f}M params")
+    model = model.cuda()
+
+    # ---- Dataset ----
+    class LmdbDataset(Dataset):
+        def __init__(self, lmdb_path):
+            self.env = lmdb_lib.open(str(lmdb_path), readonly=True, lock=False)
+            with self.env.begin() as txn:
+                self.n_samples = int(txn.get("num-samples".encode()).decode())
+        def __len__(self):
+            return self.n_samples
+        def __getitem__(self, idx):
+            with self.env.begin() as txn:
                 img_bytes = txn.get(f"image-{idx+1:09d}".encode())
                 label = txn.get(f"label-{idx+1:09d}".encode()).decode()
 
-                fname = f"syn_{idx:07d}.jpg"
-                img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-                # Resize to PP-OCR default: 48x192
-                img = img.resize((192, 48), Image.LANCZOS)
-                img.save(imgs_dir / fname, quality=95)
+            img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+            img = img.resize((IMG_W, IMG_H), Image.LANCZOS)
+            img_arr = np.array(img, dtype=np.float32) / 255.0
+            mean = np.array([0.485, 0.456, 0.406])
+            std = np.array([0.229, 0.224, 0.225])
+            img_arr = (img_arr - mean) / std
+            img_tensor = torch.from_numpy(img_arr).permute(2, 0, 1).float()
 
-                labels.append((fname, label))
+            target = torch.zeros(MAX_LEN, dtype=torch.long)
+            for i, c in enumerate(label[:MAX_LEN]):
+                if c in char_to_idx:
+                    target[i] = char_to_idx[c]
+            target_len = min(len(label), MAX_LEN)
 
-                if (idx + 1) % 50000 == 0:
-                    print(f"  Converted {idx+1}/{n}")
+            return img_tensor, target, target_len, label
 
-        # Write label files
-        train_labels = labels[:n_train]
-        val_labels = labels[n_train:]
-
-        with open(ppocr_dir / "train_label.txt", "w") as f:
-            for fname, label in train_labels:
-                f.write(f"images/{fname}\t{label}\n")
-
-        with open(ppocr_dir / "val_label.txt", "w") as f:
-            for fname, label in val_labels:
-                f.write(f"images/{fname}\t{label}\n")
-
-        env.close()
-        print(f"  Train: {len(train_labels)}, Val: {len(val_labels)}")
-
-        from modal import Volume
-        volume.commit()
-    else:
-        print("PaddleOCR format already cached")
-
-    # ---- 2. Create digit-only dictionary ----
-    dict_path = ppocr_dir / "digits_dict.txt"
-    if not dict_path.exists():
-        with open(dict_path, "w") as f:
-            for d in "0123456789":
-                f.write(f"{d}\n")
-
-    # ---- 3. Create PaddleOCR config ----
-    config_content = f"""
-Global:
-  debug: false
-  use_gpu: true
-  epoch_num: 50
-  log_smooth_window: 20
-  print_batch_step: 100
-  save_model_dir: {str(output_dir)}
-  save_epoch_step: 10
-  eval_batch_step: [0, 1000]
-  cal_metric_during_train: true
-  checkpoints: null
-  pretrained_model: null
-  save_inference_dir: null
-  use_visualdl: false
-  character_dict_path: {str(dict_path)}
-  max_text_length: 4
-  infer_mode: false
-  use_space_char: false
-  distributed: false
-  save_res_path: {str(output_dir / 'predicts.txt')}
-
-Optimizer:
-  name: Adam
-  beta1: 0.9
-  beta2: 0.999
-  lr:
-    name: Cosine
-    learning_rate: 0.001
-    warmup_epoch: 2
-  regularizer:
-    name: L2
-    factor: 0.00001
-
-Architecture:
-  model_type: rec
-  algorithm: SVTR_LCNet
-  Transform: null
-  Backbone:
-    name: MobileNetV1Enhance
-    scale: 0.5
-    last_conv_stride: [1, 2]
-    last_pool_type: avg
-  Head:
-    name: MultiHead
-    head_list:
-      - CTCHead:
-          Neck:
-            name: svtr
-            dims: 64
-            depth: 2
-            hidden_dims: 120
-            use_guide: true
-          Head:
-            fc_decay: 0.00001
-      - SARHead:
-          enc_dim: 512
-          max_text_length: 4
-
-Loss:
-  name: MultiLoss
-  loss_config_list:
-    - CTCLoss: null
-    - SARLoss: null
-
-PostProcess:
-  name: CTCLabelDecode
-
-Metric:
-  name: RecMetric
-  main_indicator: acc
-  ignore_space: false
-
-Train:
-  dataset:
-    name: SimpleDataSet
-    data_dir: {str(ppocr_dir)}
-    label_file_list:
-      - {str(ppocr_dir / 'train_label.txt')}
-    transforms:
-      - DecodeImage:
-          img_mode: BGR
-          channel_first: false
-      - RecAug: null
-      - MultiLabelEncode: null
-      - RecResizeImg:
-          image_shape: [3, 48, 192]
-      - KeepKeys:
-          keep_keys:
-            - image
-            - label_ctc
-            - label_sar
-            - length
-            - valid_ratio
-  loader:
-    shuffle: true
-    batch_size_per_card: 128
-    drop_last: true
-    num_workers: 4
-
-Eval:
-  dataset:
-    name: SimpleDataSet
-    data_dir: {str(ppocr_dir)}
-    label_file_list:
-      - {str(ppocr_dir / 'val_label.txt')}
-    transforms:
-      - DecodeImage:
-          img_mode: BGR
-          channel_first: false
-      - MultiLabelEncode: null
-      - RecResizeImg:
-          image_shape: [3, 48, 192]
-      - KeepKeys:
-          keep_keys:
-            - image
-            - label_ctc
-            - label_sar
-            - length
-            - valid_ratio
-  loader:
-    shuffle: false
-    drop_last: false
-    batch_size_per_card: 128
-    num_workers: 2
-"""
-    config_path = output_dir / "config.yml"
-    with open(config_path, "w") as f:
-        f.write(config_content)
-
-    # ---- 4. Train using cloned PaddleOCR repo ----
-    print("\nStarting PP-OCR training...")
-    start_time = time.time()
-
-    import sys
-    import subprocess
-
-    # Add PaddleOCR to path
-    PPOCR_DIR = "/opt/PaddleOCR"
-    sys.path.insert(0, PPOCR_DIR)
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            f"{PPOCR_DIR}/tools/train.py",
-            "-c", str(config_path),
-        ],
-        cwd=PPOCR_DIR,
-        capture_output=True,
-        text=True,
-        timeout=14000,
+    dataset = LmdbDataset(synth_lmdb)
+    n_val = max(1, int(len(dataset) * 0.05))
+    n_train = len(dataset) - n_val
+    train_ds, val_ds = torch.utils.data.random_split(
+        dataset, [n_train, n_val], generator=torch.Generator().manual_seed(SEED)
     )
 
-    elapsed = (time.time() - start_time) / 60
+    def collate_fn(batch):
+        imgs = torch.stack([b[0] for b in batch])
+        targets = torch.stack([b[1] for b in batch])
+        lengths = torch.tensor([b[2] for b in batch])
+        labels = [b[3] for b in batch]
+        return imgs, targets, lengths, labels
 
-    # Print output
-    if result.stdout:
-        # Print last 50 lines
-        lines = result.stdout.strip().split("\n")
-        for line in lines[-50:]:
-            print(f"  {line}")
+    train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
+                              num_workers=4, pin_memory=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False,
+                            num_workers=2, collate_fn=collate_fn)
 
-    if result.returncode != 0:
-        print(f"\n  PP-OCR training failed (exit {result.returncode})")
-        if result.stderr:
-            stderr_lines = result.stderr.strip().split("\n")
-            for line in stderr_lines[-20:]:
-                print(f"  STDERR: {line}")
+    print(f"Train: {n_train}, Val: {n_val}")
 
-        summary = {
-            "phase": "synthetic",
-            "model": "ppocr_mobile",
-            "status": "failed",
-            "total_time_min": elapsed,
-            "error": result.stderr[-500:] if result.stderr else "unknown",
-        }
-    else:
-        print(f"\n  PP-OCR training complete! Time: {elapsed:.1f} min")
+    # ---- Training ----
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-5)
+    criterion = nn.CTCLoss(blank=BLANK_IDX, zero_infinity=True)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer, max_lr=LR, epochs=EPOCHS, steps_per_epoch=len(train_loader)
+    )
 
-        # Find best model accuracy from logs
-        best_acc = 0.0
-        if result.stdout:
-            for line in result.stdout.split("\n"):
-                if "best_acc" in line.lower() or "acc:" in line.lower():
-                    # Try to extract accuracy
-                    import re
-                    match = re.search(r'acc[:\s]+([0-9.]+)', line, re.IGNORECASE)
-                    if match:
-                        try:
-                            acc = float(match.group(1))
-                            if acc > best_acc:
-                                best_acc = acc
-                        except ValueError:
-                            pass
+    def decode_ctc(output):
+        _, preds = output.max(2)
+        results = []
+        for pred in preds:
+            chars = []
+            prev = BLANK_IDX
+            for p in pred:
+                p = p.item()
+                if p != BLANK_IDX and p != prev:
+                    if p in idx_to_char:
+                        chars.append(idx_to_char[p])
+                prev = p
+            results.append("".join(chars))
+        return results
 
-        summary = {
-            "phase": "synthetic",
-            "model": "ppocr_mobile",
-            "status": "completed",
-            "total_time_min": elapsed,
-            "best_acc": best_acc,
-            "seed": SEED,
-        }
+    def evaluate(loader):
+        model.eval()
+        correct = total = 0
+        with torch.no_grad():
+            for imgs, targets, lengths, labels in loader:
+                imgs = imgs.cuda()
+                logits = model(imgs)
+                preds = decode_ctc(logits)
+                for pred, gt in zip(preds, labels):
+                    if pred == gt:
+                        correct += 1
+                    total += 1
+        return correct / max(total, 1)
 
+    best_val_acc = 0.0
+    PATIENCE = 10
+    patience_counter = 0
+
+    print(f"\nStarting Phase 1 ({EPOCHS} epochs, SVTR_LCNet)...")
+    start_time = time.time()
+
+    for epoch in range(EPOCHS):
+        model.train()
+        total_loss = 0
+        n_batches = 0
+
+        for imgs, targets, lengths, labels in train_loader:
+            imgs = imgs.cuda()
+            targets = targets.cuda()
+            lengths = lengths.cuda()
+
+            logits = model(imgs)  # (B, T, C)
+            log_probs = logits.permute(1, 0, 2).log_softmax(2)  # (T, B, C)
+            T = log_probs.size(0)
+            input_lengths = torch.full((imgs.size(0),), T, dtype=torch.long).cuda()
+
+            loss = criterion(log_probs, targets, input_lengths, lengths)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            optimizer.step()
+            scheduler.step()
+
+            total_loss += loss.item()
+            n_batches += 1
+
+        avg_loss = total_loss / max(n_batches, 1)
+
+        if (epoch + 1) % 5 == 0 or epoch == 0:
+            val_acc = evaluate(val_loader)
+            elapsed = (time.time() - start_time) / 60
+
+            print(f"  Epoch {epoch+1}/{EPOCHS} — loss: {avg_loss:.4f}, val_acc: {val_acc:.4f}, time: {elapsed:.1f}m")
+
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                patience_counter = 0
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'model_name': 'svtr_lcnet',
+                    'charset': CHARSET,
+                    'num_classes': NUM_CLASSES,
+                    'max_len': MAX_LEN,
+                    'img_size': (IMG_H, IMG_W),
+                    'epoch': epoch,
+                    'val_acc': val_acc,
+                }, str(output_dir / "best.pth"))
+                print(f"    New best! val_acc={val_acc:.4f}")
+            else:
+                patience_counter += 1
+                if patience_counter >= PATIENCE:
+                    print(f"    Early stopping at epoch {epoch+1}")
+                    break
+
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'model_name': 'svtr_lcnet',
+    }, str(output_dir / "last.pth"))
+
+    summary = {
+        "phase": "synthetic",
+        "model": "svtr_lcnet",
+        "params_m": n_params,
+        "epochs_trained": epoch + 1,
+        "best_val_acc": best_val_acc,
+        "total_time_min": (time.time() - start_time) / 60,
+        "train_samples": n_train,
+        "val_samples": n_val,
+        "seed": SEED,
+        "lr": LR,
+        "batch_size": BATCH_SIZE,
+        "img_size": [IMG_H, IMG_W],
+    }
     with open(output_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
     volume.commit()
-    print(f"Results saved to volume")
+
+    print(f"\n{'='*60}")
+    print(f"Phase 1 complete! (SVTR_LCNet)")
+    print(f"  Params: {n_params:.1f}M")
+    print(f"  Best val accuracy: {best_val_acc:.4f}")
+    print(f"  Epochs trained: {epoch + 1}")
+    print(f"  Time: {(time.time() - start_time) / 60:.1f} min")
 
 
 @app.local_entrypoint()
 def main():
-    train_ppocr_phase1.remote()
+    train_svtr_phase1.remote()
