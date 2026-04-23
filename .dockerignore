@@ -1,0 +1,32 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+.venv
+*.egg-info
+
+# IDE
+.vscode
+.idea
+.claude
+
+# Data (large, not needed in container)
+data/
+experiments/
+notebooks/
+scripts/
+runs/
+
+# Docs
+*.md
+!README.md
+docs/
+
+# Tests (not needed in production)
+tests/
+
+# Config files not needed in production
+configs/
