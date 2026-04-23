@@ -303,8 +303,49 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** TrOCR-small-printed confirmado como modelo OCR de producción. Targets alcanzados.
 
-### Run 8 — TrOCR Calibration (Temperature Scaling)
-(pendiente — para reducir hallucinations silentes)
+### Run 8 — Test Set Evaluation (FINAL) ✅
+- **Fecha:** 2026-04-22
+- **Tag:** `v1.0-preevaluation-ocr` creado antes de tocar test set
+- **Test samples:** 99 (blocked, SHA-256 locked)
+- **Model:** TrOCR-small-printed fine-tuned (seed 42, fold_0)
+
+| Metric | Validation | **Test** | Target |
+|---|---|---|---|
+| EM@100% | 84.3% | **78.8%** | — |
+| EM@80% | 95.5% | **87.3%** | ≥ 95% ❌ |
+| EM@60% | 98.5% | **94.9%** | ≥ 99% ❌ |
+| Bootstrap 95% CI | [82.1, 93.8] | **[70.7, 86.9]** | — |
+| Latency p50 CPU | 39ms | **49ms** | ≤ 500ms ✅ |
+
+**5 high-confidence hallucinations (conf >0.9):**
+
+| GT | Pred | Conf | Error type |
+|---|---|---|---|
+| 190 | 194 | 0.999 | 1-digit sub (0→4) |
+| 053 | 105 | 0.998 | 3-digit sub |
+| 118 | 178 | 0.998 | 1-digit sub (1→7) |
+| 191 | 21 | 0.968 | digit deletion |
+| 142 | 143 | 0.966 | 1-digit sub (2→3) |
+
+**Startlist validation tested:** no improvement — errors are plausible bib numbers (1-digit-off from real bibs, which exist in the startlist).
+
+**Operational metrics (for client negotiation):**
+
+| Auto-process | Manual review | EM on auto |
+|---|---|---|
+| 90% (89 photos) | 10 photos | 82.0% |
+| 85% (84 photos) | 15 photos | 85.7% |
+| 75% (74 photos) | 25 photos | **89.2%** |
+| 70% (69 photos) | 30 photos | **92.8%** |
+
+**Observaciones finales:**
+- Val→Test gap: 84.3%→78.8% EM (-5.5pp) — esperado con dataset pequeño (444 train)
+- 5 hallucinations de alta confianza confirman riesgo flagged por revisión de pares
+- Startlist no mitiga errores porque predicciones incorrectas son bibs plausibles
+- Al 70% auto-process (30% manual review), EM sube a 92.8% — viable comercialmente
+- **Bottleneck claro:** dataset de 444 muestras es insuficiente para >90% EM@80%
+
+**Decisión:** OCR cerrado para tesis. Resultado honesto: 87.3% EM@80% (target 95% no alcanzado). Para producción: necesita más datos de entrenamiento (~1000+ samples) o confidence recalibration.
 
 ---
 
@@ -323,6 +364,10 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-22 | CPX31 (8GB RAM) for deployment | Detection + OCR + future color won't fit in CPX21 (4GB). $11/mo more |
 | 2026-04-22 | ViT-tiny STR reemplaza PARSeq-tiny | PARSeq no instala en Modal (strhub config + torch.hub interactive). ViT-tiny STR: misma familia (ViT encoder + attn decoder), 5.6M params, PyTorch nativo |
 | 2026-04-22 | PP-OCRv5 → SVTR_LCNet en PyTorch | PaddlePaddle segfault en Modal Y Colab (CUDA/cuDNN mismatch). Reimplementación PyTorch de la misma arquitectura (MobileNetV1 + SVTR + CTC) |
+| 2026-04-22 | Full-res crops (v10) | Roboflow 640×640 hacía bibs 29×25px ilegibles. v10 sin resize: 209×180 avg. 655 labels, 9% skip |
+| 2026-04-22 | TrOCR-small-printed = modelo OCR | 88.4% EM val, 78.8% EM test. Pretrained text >> custom training con 444 samples |
+| 2026-04-22 | Target 95% EM@80% no alcanzado en test | 87.3% EM@80% test. Bottleneck: dataset (444 samples). Startlist no mitiga (errores son bibs plausibles) |
+| 2026-04-22 | OCR cerrado para tesis | Resultado honesto documentado. Para producción: +data o recalibration |
 | 2026-04-22 | Full-res crops (v10 sin resize) | Roboflow 640×640 hacía bibs de 29×25px (ilegibles). Full-res: 209×180 avg. Labels: 655 (was 418), skips: 62 (was 285) |
 | 2026-04-22 | Custom training inviable (<1000 samples) | Best custom: 33% EM (spatial attention + 224×224). Modelos necesitan text-specific pretraining, no solo ImageNet |
 | 2026-04-22 | **TrOCR-small-printed = modelo OCR** | 88.4% EM con 444 train samples. Pretrained text features >> ImageNet. ADR rechazó TrOCR-large, small funciona perfecto |
