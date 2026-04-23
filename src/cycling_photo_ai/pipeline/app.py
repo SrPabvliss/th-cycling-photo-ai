@@ -60,6 +60,18 @@ def _get_detector():
     return _detector
 
 
+def _get_bib_reader():
+    """Lazy-load TrOCR bib reader on first OCR request."""
+    global _bib_reader
+    if _bib_reader is not None:
+        return _bib_reader
+
+    from cycling_photo_ai.ocr.inference.trocr_reader import TrOCRBibReader
+
+    _bib_reader = TrOCRBibReader()
+    return _bib_reader
+
+
 def _get_orchestrator():
     """Lazy-load full pipeline orchestrator."""
     global _orchestrator
@@ -69,10 +81,10 @@ def _get_orchestrator():
     from cycling_photo_ai.pipeline.orchestrator import PipelineOrchestrator
 
     detector = _get_detector()
-    # bib_reader will be None until OCR models are trained and configured
+    bib_reader = _get_bib_reader()
     _orchestrator = PipelineOrchestrator(
         detector=detector,
-        bib_reader=_bib_reader,
+        bib_reader=bib_reader,
     )
     return _orchestrator
 

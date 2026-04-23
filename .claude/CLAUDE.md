@@ -93,7 +93,7 @@ Domains don't import from each other. `pipeline/` is the thin orchestration laye
 - `ruff` for linting/formatting (like Biome)
 - `pytest` for testing
 - **Detection:** `ultralytics` (YOLO11m), `rfdetr` (RF-DETR-M)
-- **OCR:** ViT-tiny STR (5.6M), SVTR_LCNet (0.3M) — both PyTorch, `onnxruntime` for production
+- **OCR:** TrOCR-small-printed (61.6M) — `transformers>=4.40,<4.50`, `sentencepiece`
 - **Pipeline:** `FastAPI` + `Pydantic`
 - **Evaluation:** `pycocotools`, `tidecv`, `scipy`
 
