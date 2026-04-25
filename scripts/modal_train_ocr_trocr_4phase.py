@@ -50,29 +50,31 @@ PHASE_CONFIGS = {
         "name": "phase1_synthetic",
         "base_weights": "microsoft/trocr-small-printed",
         "train_lmdb": "ocr/synthetic/lmdb",
-        "val_lmdb": "ocr/dataset/fold_0/val/lmdb",
-        "encoder_lr": 1e-4,
-        "decoder_lr": 1e-3,
+        "val_lmdb": "ocr/synthetic/lmdb",  # validate on synthetic too (domain match)
+        "encoder_lr": 5e-6,   # same as working Run 6
+        "decoder_lr": 5e-5,   # same as working Run 6
         "epochs": 15,
         "batch_size": 64,
         "patience": 8,
         "freeze_encoder_layers": 0,
         "augment": False,
-        "max_train_samples": 50000,  # subsample from 200K
+        "max_train_samples": 45000,  # 45K train
+        "max_val_samples": 5000,     # 5K val (from same LMDB, different indices)
     },
     2: {
         "name": "phase2_svhn",
         "base_weights": "__phase1__",
         "train_lmdb": "ocr/svhn/lmdb",
-        "val_lmdb": "ocr/dataset/fold_0/val/lmdb",
-        "encoder_lr": 5e-5,
-        "decoder_lr": 5e-4,
+        "val_lmdb": "ocr/svhn/lmdb",  # validate on SVHN too (domain match)
+        "encoder_lr": 5e-6,   # conservative
+        "decoder_lr": 5e-5,   # conservative
         "epochs": 10,
         "batch_size": 64,
         "patience": 6,
         "freeze_encoder_layers": 0,
         "augment": False,
-        "max_train_samples": 50000,  # subsample from ~600K
+        "max_train_samples": 45000,
+        "max_val_samples": 5000,
     },
     4: {
         "name": "phase4_finetune",
@@ -87,6 +89,7 @@ PHASE_CONFIGS = {
         "freeze_encoder_layers": 6,
         "augment": True,
         "max_train_samples": None,  # use all
+        "max_val_samples": None,
     },
 }
 
@@ -122,7 +125,7 @@ def train_phase(phase: int):
     print(f"{'='*60}")
     print(f"  PHASE {phase}: {cfg['name']}")
     print(f"  GPU: {torch.cuda.get_device_name(0)}")
-    print(f"  VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
+    print(f"  VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f} GB")
     print(f"  Mixed precision: fp16")
     print(f"{'='*60}")
 
@@ -237,16 +240,33 @@ def train_phase(phase: int):
         print(f"ERROR: Train LMDB not found at {train_lmdb}")
         return
 
-    train_ds = LMDBDataset(train_lmdb, processor, augment_fn=train_augment)
-    val_ds = LMDBDataset(val_lmdb, processor, augment_fn=None)
+    full_train_ds = LMDBDataset(train_lmdb, processor, augment_fn=train_augment)
 
-    # Subsample large datasets
-    max_samples = cfg.get("max_train_samples")
-    if max_samples and len(train_ds) > max_samples:
-        indices = list(range(len(train_ds)))
-        random.shuffle(indices)
-        train_ds = Subset(train_ds, indices[:max_samples])
-        print(f"  Subsampled train: {max_samples}/{len(indices)} samples")
+    # When train and val use same LMDB, split by indices
+    same_lmdb = cfg["train_lmdb"] == cfg["val_lmdb"]
+    max_train = cfg.get("max_train_samples")
+    max_val = cfg.get("max_val_samples")
+
+    if same_lmdb and max_train and max_val:
+        # Disjoint split: first max_train for train, next max_val for val
+        all_indices = list(range(len(full_train_ds)))
+        random.shuffle(all_indices)
+        train_indices = all_indices[:max_train]
+        val_indices = all_indices[max_train:max_train + max_val]
+        train_ds = Subset(full_train_ds, train_indices)
+        # Val needs no augmentation — create separate dataset
+        val_base = LMDBDataset(val_lmdb, processor, augment_fn=None)
+        val_ds = Subset(val_base, val_indices)
+        print(f"  Same LMDB split: {len(train_ds)} train / {len(val_ds)} val")
+    else:
+        val_ds = LMDBDataset(val_lmdb, processor, augment_fn=None)
+        if max_train and len(full_train_ds) > max_train:
+            indices = list(range(len(full_train_ds)))
+            random.shuffle(indices)
+            train_ds = Subset(full_train_ds, indices[:max_train])
+            print(f"  Subsampled train: {max_train}/{len(indices)} samples")
+        else:
+            train_ds = full_train_ds
 
     train_loader = DataLoader(
         train_ds,
