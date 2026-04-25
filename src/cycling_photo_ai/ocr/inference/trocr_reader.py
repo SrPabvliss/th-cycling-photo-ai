@@ -7,6 +7,7 @@ CPU inference, ~40ms/crop.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cycling_photo_ai.ocr.inference.ports import BibReading
@@ -62,6 +63,17 @@ class TrOCRBibReader:
         vocab_size = self._processor.tokenizer.vocab_size
         self._logits_processor = DigitOnlyLogitsProcessor(allowed_ids, vocab_size)
 
+        # Temperature scaling — load calibrated T if available
+        import json
+
+        temp_path = Path(self._weights_path) / "temperature.json"
+        if temp_path.exists():
+            with open(temp_path) as f:
+                temp_config = json.load(f)
+            self._temperature = temp_config["temperature"]
+        else:
+            self._temperature = 1.0
+
     def read(self, crop: np.ndarray) -> BibReading:
         """Read bib number from a cropped image (numpy array, BGR)."""
         if self._model is None:
@@ -98,10 +110,11 @@ class TrOCRBibReader:
         pred_text = self._processor.decode(pred_ids, skip_special_tokens=True)
         digits = "".join(c for c in pred_text if c.isdigit())
 
-        # Compute per-step confidence
+        # Compute per-step confidence (with temperature scaling)
         confidence_per_digit: list[float] = []
         for step_scores in outputs.scores:
-            probs = torch.softmax(step_scores[0], dim=-1)
+            scaled_scores = step_scores[0] / self._temperature
+            probs = torch.softmax(scaled_scores, dim=-1)
             confidence_per_digit.append(float(probs.max()))
 
         # Overall confidence = min of per-step (weakest link)
