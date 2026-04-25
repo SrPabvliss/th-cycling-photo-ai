@@ -60,7 +60,7 @@ class TrOCRBibReader:
 
         digit_ids, special_ids = get_digit_token_ids(self._processor.tokenizer)
         allowed_ids = digit_ids | special_ids
-        vocab_size = self._processor.tokenizer.vocab_size
+        vocab_size = self._model.config.decoder.vocab_size  # 64044, larger than tokenizer
         self._logits_processor = DigitOnlyLogitsProcessor(allowed_ids, vocab_size)
 
         # Temperature scaling — load calibrated T if available
