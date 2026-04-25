@@ -28,9 +28,11 @@ class TrOCRBibReader:
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
 
     def _load(self) -> None:
-        from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+        from transformers import AutoImageProcessor, AutoTokenizer, TrOCRProcessor, VisionEncoderDecoderModel
 
-        self._processor = TrOCRProcessor.from_pretrained(self._weights_path)
+        image_processor = AutoImageProcessor.from_pretrained(self._weights_path)
+        tokenizer = AutoTokenizer.from_pretrained(self._weights_path)
+        self._processor = TrOCRProcessor(image_processor=image_processor, tokenizer=tokenizer)
         self._model = VisionEncoderDecoderModel.from_pretrained(self._weights_path)
         self._model.eval()
 
@@ -41,6 +43,17 @@ class TrOCRBibReader:
         self._model.generation_config.max_length = 6  # max 4 digits + special tokens
         self._model.generation_config.pad_token_id = self._processor.tokenizer.pad_token_id
         self._model.generation_config.eos_token_id = self._processor.tokenizer.sep_token_id
+
+        # Constrained decoding — restrict output to digits only
+        from cycling_photo_ai.ocr.inference.constrained_decoding import (
+            DigitOnlyLogitsProcessor,
+            get_digit_token_ids,
+        )
+
+        digit_ids, special_ids = get_digit_token_ids(self._processor.tokenizer)
+        allowed_ids = digit_ids | special_ids
+        vocab_size = self._processor.tokenizer.vocab_size
+        self._logits_processor = DigitOnlyLogitsProcessor(allowed_ids, vocab_size)
 
     def read(self, crop: np.ndarray) -> BibReading:
         """Read bib number from a cropped image (numpy array, BGR)."""
@@ -66,6 +79,7 @@ class TrOCRBibReader:
                 pixel_values,
                 output_scores=True,
                 return_dict_in_generate=True,
+                logits_processor=[self._logits_processor],
             )
 
         # Decode prediction
@@ -99,6 +113,7 @@ class TrOCRBibReader:
             confidence_per_digit=confidence_per_digit,
             status=status,
             rejection_reason=rejection_reason,
+            raw_text=pred_text,
         )
 
     def is_loaded(self) -> bool:
