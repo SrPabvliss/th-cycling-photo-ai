@@ -7,12 +7,14 @@ CPU inference, ~40ms/crop.
 from __future__ import annotations
 
 import os
-from pathlib import Path
-
-import numpy as np
+from typing import TYPE_CHECKING
 
 from cycling_photo_ai.ocr.inference.ports import BibReading
+from cycling_photo_ai.ocr.inference.preprocessing import preprocess_crop
 from cycling_photo_ai.shared.paths import WEIGHTS_DIR
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 class TrOCRBibReader:
@@ -28,7 +30,12 @@ class TrOCRBibReader:
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
 
     def _load(self) -> None:
-        from transformers import AutoImageProcessor, AutoTokenizer, TrOCRProcessor, VisionEncoderDecoderModel
+        from transformers import (
+            AutoImageProcessor,
+            AutoTokenizer,
+            TrOCRProcessor,
+            VisionEncoderDecoderModel,
+        )
 
         image_processor = AutoImageProcessor.from_pretrained(self._weights_path)
         tokenizer = AutoTokenizer.from_pretrained(self._weights_path)
@@ -63,11 +70,15 @@ class TrOCRBibReader:
         import torch
         from PIL import Image
 
+        # Conditional preprocessing (CLAHE, denoise per ADR-010 gates)
+        processed_crop, preprocessing_applied = preprocess_crop(crop)
+
         # Convert BGR numpy to RGB PIL
-        if crop.shape[2] == 3:
-            rgb = crop[:, :, ::-1]  # BGR → RGB
-        else:
-            rgb = crop
+        rgb = (
+            processed_crop[:, :, ::-1]
+            if processed_crop.shape[2] == 3
+            else processed_crop
+        )
         pil_img = Image.fromarray(rgb)
 
         # Process
@@ -113,6 +124,7 @@ class TrOCRBibReader:
             confidence_per_digit=confidence_per_digit,
             status=status,
             rejection_reason=rejection_reason,
+            preprocessing_applied=preprocessing_applied,
             raw_text=pred_text,
         )
 
