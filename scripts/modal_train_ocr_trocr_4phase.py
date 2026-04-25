@@ -1,17 +1,23 @@
 """
 Modal training — TrOCR 4-phase pretraining pipeline.
 
-Phase 1: 200K synthetic (sport fonts + fabric backgrounds)
-Phase 2: SVHN real digits (~600K)
+Phase 1: 50K synthetic subsample (sport fonts + fabric backgrounds)
+Phase 2: SVHN real digits (subsample 50K from ~600K)
 Phase 4: 444 custom bib crops (discriminative LR, partial freeze)
 
-Each phase loads weights from previous phase. Run sequentially:
+Key optimizations vs v1:
+- fp16 mixed precision (2x speedup)
+- Subsample large datasets (50K sufficient for pretrained model)
+- Larger batch size for phases 1-2
+- Log raw predictions to diagnose EM=0 issues
+
+Each phase loads weights from previous. Run sequentially:
     modal run --detach scripts/modal_train_ocr_trocr_4phase.py --phase 1
     modal run --detach scripts/modal_train_ocr_trocr_4phase.py --phase 2
     modal run --detach scripts/modal_train_ocr_trocr_4phase.py --phase 4
 
 After all phases:
-    modal volume get cycling-photo-ai-vol experiments/ocr_trocr_4phase/phase4/best weights/trocr_bib_4phase
+    bash scripts/download_4phase_weights.sh
 """
 
 import modal
@@ -45,13 +51,14 @@ PHASE_CONFIGS = {
         "base_weights": "microsoft/trocr-small-printed",
         "train_lmdb": "ocr/synthetic/lmdb",
         "val_lmdb": "ocr/dataset/fold_0/val/lmdb",
-        "encoder_lr": 5e-5,
-        "decoder_lr": 5e-4,
-        "epochs": 30,
-        "batch_size": 32,
-        "patience": 10,
+        "encoder_lr": 1e-4,
+        "decoder_lr": 1e-3,
+        "epochs": 15,
+        "batch_size": 64,
+        "patience": 8,
         "freeze_encoder_layers": 0,
-        "augment": False,  # synthetic already augmented
+        "augment": False,
+        "max_train_samples": 50000,  # subsample from 200K
     },
     2: {
         "name": "phase2_svhn",
@@ -60,11 +67,12 @@ PHASE_CONFIGS = {
         "val_lmdb": "ocr/dataset/fold_0/val/lmdb",
         "encoder_lr": 5e-5,
         "decoder_lr": 5e-4,
-        "epochs": 20,
-        "batch_size": 32,
-        "patience": 10,
+        "epochs": 10,
+        "batch_size": 64,
+        "patience": 6,
         "freeze_encoder_layers": 0,
         "augment": False,
+        "max_train_samples": 50000,  # subsample from ~600K
     },
     4: {
         "name": "phase4_finetune",
@@ -73,11 +81,12 @@ PHASE_CONFIGS = {
         "val_lmdb": "ocr/dataset/fold_0/val/lmdb",
         "encoder_lr": 5e-7,
         "decoder_lr": 5e-6,
-        "epochs": 50,
+        "epochs": 100,
         "batch_size": 8,
         "patience": 20,
-        "freeze_encoder_layers": 6,  # freeze first 6 of 12 encoder layers
+        "freeze_encoder_layers": 6,
         "augment": True,
+        "max_train_samples": None,  # use all
     },
 }
 
@@ -85,7 +94,7 @@ PHASE_CONFIGS = {
 @app.function(
     image=image,
     gpu="a10g",
-    timeout=14400,
+    timeout=7200,  # 2 hours per phase should be plenty
     volumes={VOLUME_PATH: volume},
 )
 def train_phase(phase: int):
@@ -100,7 +109,8 @@ def train_phase(phase: int):
     import torch
     import torchvision.transforms as T
     from PIL import Image
-    from torch.utils.data import DataLoader, Dataset
+    from torch.cuda.amp import GradScaler, autocast
+    from torch.utils.data import DataLoader, Dataset, Subset
     from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 
     random.seed(SEED)
@@ -112,6 +122,8 @@ def train_phase(phase: int):
     print(f"{'='*60}")
     print(f"  PHASE {phase}: {cfg['name']}")
     print(f"  GPU: {torch.cuda.get_device_name(0)}")
+    print(f"  VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
+    print(f"  Mixed precision: fp16")
     print(f"{'='*60}")
 
     # ---- Resolve base weights ----
@@ -130,14 +142,12 @@ def train_phase(phase: int):
             print("Run phase 2 first!")
             return
     else:
-        weights_path = cfg["base_weights"]  # HuggingFace model name
+        weights_path = cfg["base_weights"]
 
     print(f"  Base weights: {weights_path}")
 
     # ---- Load model ----
-    processor = TrOCRProcessor.from_pretrained(
-        weights_path if "microsoft" not in weights_path else weights_path,
-    )
+    processor = TrOCRProcessor.from_pretrained(weights_path)
     model = VisionEncoderDecoderModel.from_pretrained(weights_path)
 
     model.config.pad_token_id = processor.tokenizer.pad_token_id
@@ -158,7 +168,6 @@ def train_phase(phase: int):
     if n_freeze > 0:
         frozen = 0
         for name, param in model.encoder.named_parameters():
-            # Freeze layers 0 through n_freeze-1
             for i in range(n_freeze):
                 if f"layer.{i}." in name:
                     param.requires_grad = False
@@ -201,7 +210,6 @@ def train_phase(phase: int):
                 images=img, return_tensors="pt"
             ).pixel_values.squeeze(0)
 
-            # Keep only digits in label
             label = "".join(c for c in label if c.isdigit())
 
             labels = self.processor.tokenizer(
@@ -232,6 +240,14 @@ def train_phase(phase: int):
     train_ds = LMDBDataset(train_lmdb, processor, augment_fn=train_augment)
     val_ds = LMDBDataset(val_lmdb, processor, augment_fn=None)
 
+    # Subsample large datasets
+    max_samples = cfg.get("max_train_samples")
+    if max_samples and len(train_ds) > max_samples:
+        indices = list(range(len(train_ds)))
+        random.shuffle(indices)
+        train_ds = Subset(train_ds, indices[:max_samples])
+        print(f"  Subsampled train: {max_samples}/{len(indices)} samples")
+
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg["batch_size"],
@@ -239,6 +255,7 @@ def train_phase(phase: int):
         num_workers=4,
         collate_fn=collate,
         pin_memory=True,
+        persistent_workers=True,
     )
     val_loader = DataLoader(
         val_ds,
@@ -249,6 +266,8 @@ def train_phase(phase: int):
     )
 
     print(f"  Train: {len(train_ds)}, Val: {len(val_ds)}")
+    print(f"  Batches/epoch: {len(train_loader)}")
+    print(f"  Batch size: {cfg['batch_size']}")
 
     # ---- Optimizer ----
     encoder_params = [p for p in model.encoder.parameters() if p.requires_grad]
@@ -263,18 +282,22 @@ def train_phase(phase: int):
         optimizer, T_max=cfg["epochs"], eta_min=1e-7
     )
 
+    # Mixed precision
+    scaler = GradScaler()
+
     output_dir = base_dir / f"phase{phase}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- Evaluate ----
-    def evaluate():
+    def evaluate(log_all=False):
         model.eval()
         correct = total = 0
         examples = []
         with torch.no_grad():
             for pixel_values, _, gt_labels in val_loader:
                 pixel_values = pixel_values.cuda()
-                generated_ids = model.generate(pixel_values)
+                with autocast(dtype=torch.float16):
+                    generated_ids = model.generate(pixel_values)
                 pred_texts = processor.batch_decode(generated_ids, skip_special_tokens=True)
 
                 for pred, gt in zip(pred_texts, gt_labels):
@@ -282,17 +305,30 @@ def train_phase(phase: int):
                     if pred_clean == gt:
                         correct += 1
                     total += 1
-                    if len(examples) < 20:
+                    if len(examples) < 30:
                         examples.append((gt, pred_clean, pred))
 
-        return correct / max(total, 1), correct, total, examples
+        em = correct / max(total, 1)
+
+        if log_all:
+            print(f"    Val samples: {total}, Correct: {correct}")
+            for gt, pred_clean, pred_raw in examples[:10]:
+                mark = "✓" if gt == pred_clean else "✗"
+                print(f"    {mark} gt='{gt}' pred='{pred_clean}' (raw='{pred_raw}')")
+
+        return em, correct, total, examples
 
     # ---- Training loop ----
     best_em = 0.0
     patience_counter = 0
     start = time.time()
 
-    print(f"\n  Starting phase {phase} training ({cfg['epochs']} epochs)...\n")
+    print(f"\n  Starting phase {phase} training ({cfg['epochs']} epochs)...")
+    print(f"  LR: encoder={cfg['encoder_lr']}, decoder={cfg['decoder_lr']}\n")
+
+    # Initial evaluation to see baseline
+    em_init, _, _, _ = evaluate(log_all=True)
+    print(f"  Initial EM (before training): {em_init:.4f}\n")
 
     for epoch in range(cfg["epochs"]):
         model.train()
@@ -302,23 +338,36 @@ def train_phase(phase: int):
             pixel_values = pixel_values.cuda()
             labels = labels.cuda()
 
-            outputs = model(pixel_values=pixel_values, labels=labels)
-            loss = outputs.loss
+            with autocast(dtype=torch.float16):
+                outputs = model(pixel_values=pixel_values, labels=labels)
+                loss = outputs.loss
 
             optimizer.zero_grad()
-            loss.backward()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_loss += loss.item()
             n_batches += 1
 
+            # Log progress within epoch for large datasets
+            if n_batches % 200 == 0:
+                elapsed = (time.time() - start) / 60
+                print(
+                    f"    batch {n_batches}/{len(train_loader)} — "
+                    f"loss: {total_loss/n_batches:.4f}, time: {elapsed:.1f}m"
+                )
+
         scheduler.step()
         avg_loss = total_loss / max(n_batches, 1)
 
-        # Evaluate every 5 epochs or first/last
-        if (epoch + 1) % 5 == 0 or epoch == 0 or epoch == cfg["epochs"] - 1:
-            em, correct, total, examples = evaluate()
+        # Evaluate every 2 epochs for phases 1-2, every 5 for phase 4
+        eval_freq = 2 if phase in (1, 2) else 5
+        if (epoch + 1) % eval_freq == 0 or epoch == 0 or epoch == cfg["epochs"] - 1:
+            log_all = (epoch == 0 or (epoch + 1) % 10 == 0)
+            em, correct, total, examples = evaluate(log_all=log_all)
             elapsed = (time.time() - start) / 60
 
             print(
@@ -326,11 +375,6 @@ def train_phase(phase: int):
                 f"loss: {avg_loss:.4f}, EM: {em:.4f} ({correct}/{total}), "
                 f"time: {elapsed:.1f}m"
             )
-
-            if epoch == 0 or (epoch + 1) % 10 == 0:
-                for gt, pred_clean, pred_raw in examples[:5]:
-                    mark = "✓" if gt == pred_clean else "✗"
-                    print(f"    {mark} gt={gt} pred={pred_clean} (raw='{pred_raw}')")
 
             if em > best_em:
                 best_em = em
