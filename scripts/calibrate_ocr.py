@@ -89,7 +89,7 @@ def main():
 
     digit_ids, special_ids = get_digit_token_ids(processor.tokenizer)
     allowed_ids = digit_ids | special_ids
-    vocab_size = processor.tokenizer.vocab_size
+    vocab_size = model.config.decoder.vocab_size  # 64044, larger than tokenizer
     logits_processor = DigitOnlyLogitsProcessor(allowed_ids, vocab_size)
 
     # Run inference on val set
