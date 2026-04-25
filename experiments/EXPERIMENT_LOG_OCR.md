@@ -347,6 +347,43 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** OCR cerrado para tesis. Resultado honesto: 87.3% EM@80% (target 95% no alcanzado). Para producción: necesita más datos de entrenamiento (~1000+ samples) o confidence recalibration.
 
+### Run 9 — Constrained Decoding + Preprocessing + Calibration (Test Set) 🔄 PENDING
+- **Fecha:** 2026-04-24
+- **Test samples:** 98 (blocked, SHA-256 locked)
+- **Model:** TrOCR-small-printed fine-tuned (seed 42, fold_0)
+- **Changes vs Run 8:**
+  1. **Constrained decoding** — digit-only LogitsProcessor, restricts vocabulary to {0-9, EOS, PAD, BOS}
+  2. **Preprocessing pipeline** — CLAHE + denoising with statistical gates (only applied when crop quality is poor)
+  3. **Temperature scaling** — T=1.875, calibrated on validation set to reduce overconfidence
+- **Script:** `scripts/eval_ocr_test.py`
+
+| Metric | Run 8 (baseline) | **Run 9** | Delta |
+|---|---|---|---|
+| EM@100% | 78.8% | **TBD** | TBD |
+| EM@80% | 87.3% | **TBD** | TBD |
+| EM@60% | 94.9% | **TBD** | TBD |
+| ECE | — | **TBD** | — |
+| Bootstrap 95% CI | [70.7, 86.9] | **TBD** | — |
+
+**High-confidence errors (conf >0.9):**
+
+_To be filled after running `uv run python scripts/eval_ocr_test.py`_
+
+**Observaciones:**
+
+- Constrained decoding eliminates non-digit hallucinations (e.g., "1OO" → forced "100")
+- Temperature scaling (T=1.875) reduces overconfident errors — wrong predictions now report lower confidence
+- Preprocessing gates activate only on poor-quality crops (low contrast, high noise)
+- Combined effect on EM@Coverage is the key question: do errors shift below the confidence threshold?
+
+**Hipótesis:**
+- EM@100% may stay similar (model still predicts wrong digits, just with lower confidence)
+- EM@80% should improve: temperature scaling pushes wrong predictions below the acceptance threshold
+- ECE should drop significantly: calibrated probabilities better reflect true accuracy
+- High-confidence errors (>0.9) should decrease: T=1.875 softens extreme confidences
+
+**Decisión:** _Pending results. If EM@80% improves significantly, constrained decoding + calibration validated as post-hoc improvements. If not, more training data remains the bottleneck._
+
 ---
 
 ## Decisiones clave
