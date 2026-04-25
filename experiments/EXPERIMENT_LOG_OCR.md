@@ -347,42 +347,54 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** OCR cerrado para tesis. Resultado honesto: 87.3% EM@80% (target 95% no alcanzado). Para producción: necesita más datos de entrenamiento (~1000+ samples) o confidence recalibration.
 
-### Run 9 — Constrained Decoding + Preprocessing + Calibration (Test Set) 🔄 PENDING
-- **Fecha:** 2026-04-24
-- **Test samples:** 98 (blocked, SHA-256 locked)
+### Run 9 — Constrained Decoding + Preprocessing + Calibration (Test Set) ✅
+- **Fecha:** 2026-04-25
+- **Test samples:** 99 (blocked, SHA-256 locked)
 - **Model:** TrOCR-small-printed fine-tuned (seed 42, fold_0)
 - **Changes vs Run 8:**
   1. **Constrained decoding** — digit-only LogitsProcessor, restricts vocabulary to {0-9, EOS, PAD, BOS}
-  2. **Preprocessing pipeline** — CLAHE + denoising with statistical gates (only applied when crop quality is poor)
-  3. **Temperature scaling** — T=1.875, calibrated on validation set to reduce overconfidence
+  2. **Preprocessing pipeline** — CLAHE + denoising with statistical gates (3/99 crops preprocessed)
+  3. **Temperature scaling** — T=1.875, calibrated on validation set (ECE 0.087→0.041 on val)
 - **Script:** `scripts/eval_ocr_test.py`
 
 | Metric | Run 8 (baseline) | **Run 9** | Delta |
 |---|---|---|---|
-| EM@100% | 78.8% | **TBD** | TBD |
-| EM@80% | 87.3% | **TBD** | TBD |
-| EM@60% | 94.9% | **TBD** | TBD |
-| ECE | — | **TBD** | — |
-| Bootstrap 95% CI | [70.7, 86.9] | **TBD** | — |
+| EM@100% | 78.8% | **77.8%** | -1.0pp |
+| EM@80% | 87.3% | **84.8%** | -2.5pp |
+| EM@60% | 94.9% | **91.5%** | -3.4pp |
+| ECE | — | **0.070** | — |
+| Bootstrap 95% CI | [70.7, 86.9] | **[69.7, 85.9]** | — |
+| High-conf errors (>0.9) | 5 | **3** | -2 |
+| Latency p50 | 49ms | **74ms** | +25ms |
 
 **High-confidence errors (conf >0.9):**
 
-_To be filled after running `uv run python scripts/eval_ocr_test.py`_
+| GT | Pred | Conf | Error type |
+|---|---|---|---|
+| 202 | 102 | 0.942 | 1-digit sub (2→1) |
+| 118 | 178 | 0.936 | 1-digit sub (1→7) |
+| 62 | 52 | 0.916 | 1-digit sub (6→5) |
+
+**By digit length:**
+
+| Length | EM | Count |
+|---|---|---|
+| 1 digit | 100% | 2/2 |
+| 2 digits | 63.0% | 17/27 |
+| 3 digits | 82.9% | 58/70 |
 
 **Observaciones:**
 
-- Constrained decoding eliminates non-digit hallucinations (e.g., "1OO" → forced "100")
-- Temperature scaling (T=1.875) reduces overconfident errors — wrong predictions now report lower confidence
-- Preprocessing gates activate only on poor-quality crops (low contrast, high noise)
-- Combined effect on EM@Coverage is the key question: do errors shift below the confidence threshold?
+- EM@100% dropped slightly (-1.0pp): constrained decoding changed some predictions that previously matched by luck
+- EM@80% dropped (-2.5pp): temperature scaling redistributed confidences but model's ranking of correct vs wrong did not improve — some correct predictions now have lower confidence too
+- High-confidence errors reduced from 5 to 3: T=1.875 pushed 2 previously high-conf errors below 0.9
+- Preprocessing applied to only 3/99 crops — most real photos pass all gates (good contrast, sharp)
+- 2-digit bibs worst (63% EM) — model struggles more with shorter sequences
+- Latency increased +25ms due to preprocessing overhead
 
-**Hipótesis:**
-- EM@100% may stay similar (model still predicts wrong digits, just with lower confidence)
-- EM@80% should improve: temperature scaling pushes wrong predictions below the acceptance threshold
-- ECE should drop significantly: calibrated probabilities better reflect true accuracy
-- High-confidence errors (>0.9) should decrease: T=1.875 softens extreme confidences
+**Conclusión:** Post-hoc inference improvements (constrained decoding, preprocessing, calibration) do NOT improve accuracy. They help with confidence calibration (3 fewer high-conf errors) but the model's digit recognition ability is the bottleneck. **Retraining with more data is required.**
 
-**Decisión:** _Pending results. If EM@80% improves significantly, constrained decoding + calibration validated as post-hoc improvements. If not, more training data remains the bottleneck._
+**Decisión:** Proceed to Task 5 — Re-train TrOCR with 4-phase pipeline (Synthetic→SVHN→Fine-tune). The 444-sample 1-phase fine-tune is clearly insufficient.
 
 ---
 
