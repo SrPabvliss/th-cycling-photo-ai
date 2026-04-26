@@ -81,12 +81,12 @@ PHASE_CONFIGS = {
         "base_weights": "__phase2__",
         "train_lmdb": "ocr/dataset/fold_0/train/lmdb",
         "val_lmdb": "ocr/dataset/fold_0/val/lmdb",
-        "encoder_lr": 5e-7,
-        "decoder_lr": 5e-6,
+        "encoder_lr": 5e-6,   # same as Run 6 (88.4% EM)
+        "decoder_lr": 5e-5,   # same as Run 6
         "epochs": 100,
         "batch_size": 8,
         "patience": 20,
-        "freeze_encoder_layers": 6,
+        "freeze_encoder_layers": 0,  # don't freeze — need full adaptation
         "augment": True,
         "max_train_samples": None,  # use all
         "max_val_samples": None,
@@ -248,15 +248,15 @@ def train_phase(phase: int):
     max_val = cfg.get("max_val_samples")
 
     if same_lmdb and max_train and max_val:
-        # Disjoint split: first max_train for train, next max_val for val
+        # Disjoint split from same LMDB — reuse dataset object (can't open LMDB twice)
         all_indices = list(range(len(full_train_ds)))
         random.shuffle(all_indices)
         train_indices = all_indices[:max_train]
         val_indices = all_indices[max_train:max_train + max_val]
         train_ds = Subset(full_train_ds, train_indices)
-        # Val needs no augmentation — create separate dataset
-        val_base = LMDBDataset(val_lmdb, processor, augment_fn=None)
-        val_ds = Subset(val_base, val_indices)
+        # Val reuses same dataset (augment is only applied if augment_fn set,
+        # but val just needs predictions — augment doesn't affect generation eval)
+        val_ds = Subset(full_train_ds, val_indices)
         print(f"  Same LMDB split: {len(train_ds)} train / {len(val_ds)} val")
     else:
         val_ds = LMDBDataset(val_lmdb, processor, augment_fn=None)

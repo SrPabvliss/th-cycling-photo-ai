@@ -396,6 +396,82 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** Proceed to Task 5 — Re-train TrOCR with 4-phase pipeline (Synthetic→SVHN→Fine-tune). The 444-sample 1-phase fine-tune is clearly insufficient.
 
+### Run 10 — TrOCR 4-Phase Pretraining Pipeline ✅
+- **Fecha:** 2026-04-25
+- **GPU:** NVIDIA A10G (Modal)
+- **Architecture:** TrOCR-small-printed (61.6M params)
+- **Script:** `scripts/modal_train_ocr_trocr_4phase.py`
+- **Optimization:** fp16 mixed precision, subsampled 50K for phases 1-2
+
+**Phase 1 — Synthetic (50K from 200K TRDG):**
+- Base: `microsoft/trocr-small-printed`
+- LR: encoder 5e-6, decoder 5e-5 (same as Run 6)
+- Epochs: 15, batch 64
+- Val: 5K synthetic hold-out (same LMDB, disjoint indices)
+- **Result: 67.9% EM** (matches Run 1 ViT-tiny 68.4%)
+- Time: 48.6 min
+
+**Phase 2 — SVHN (50K from ~600K real digits):**
+- Base: Phase 1 weights
+- LR: encoder 5e-6, decoder 5e-5
+- Epochs: 10, batch 64
+- Val: 5K SVHN hold-out
+- **Result: 92.0% EM** (+24.1pp from Phase 1, surpasses Run 3 ViT-tiny 86.6%)
+- Time: 32.8 min
+
+**Phase 4 — Fine-tune (444 bib crops, fold_0):**
+- Base: Phase 2 weights
+- LR: encoder 5e-6, decoder 5e-5 (same as Run 6)
+- Epochs: 100 (best at epoch 100, still improving), batch 8
+- No encoder freezing (needs full adaptation from SVHN → bibs)
+- Augmentation: rotation ±8°, color jitter, Gaussian blur
+- Val: 112 bib crops (fold_0)
+- **Result: 89.3% EM (100/112)** — surpasses Run 6 (88.4%)
+- Time: 7.4 min
+
+**Phase progression:**
+
+| Phase | Domain | Val EM | Δ vs previous |
+|---|---|---|---|
+| Base (pretrained) | Printed text | — | — |
+| Phase 1 (Synthetic) | Sport fonts + fabric bg | 67.9% | — |
+| Phase 2 (SVHN) | Real street digits | 92.0% | +24.1pp |
+| Phase 4 (Fine-tune) | Real bib crops | **89.3%** | Adapted to domain |
+
+**Failed attempts during training:**
+1. **v1 (200K, batch 32, fp32):** Timed out at 4h — only 5 epochs of 30 completed (47min/epoch)
+2. **v2 (50K, LR 1e-4/1e-3):** LR too high — destroyed pretrained generation, raw='' empty output, EM=0 for 14 epochs
+3. **v3 Phase 4 (LR 5e-7/5e-6, freeze 6 encoder layers):** LR too low — stuck at 56.2% EM for 40+ epochs, couldn't adapt from SVHN to bibs
+
+**Key lessons:**
+- LR must match Run 6 (5e-6/5e-5) for ALL phases — pretrained TrOCR is sensitive to LR
+- Don't freeze encoder for domain adaptation (SVHN digits ≠ bib crops)
+- Validate on same domain during pretraining (synthetic→synthetic, SVHN→SVHN)
+- 50K subsample sufficient for pretrained model — no need for full 200K
+
+**Observaciones:**
+- 4-phase pipeline improves val EM: 88.4% (1-phase) → **89.3%** (4-phase)
+- Model still improving at epoch 100 (100/112 correct at end vs 96/112 at epoch 80)
+- Errors are 1-digit substitutions: 159→59 (digit deletion), 52→62, 010→013
+- **Test set evaluation pending** — need to download weights and run formal eval
+
+**Decisión:** Download Phase 4 weights, recalibrate temperature, evaluate on locked test set. If EM@80% improves over Run 8 baseline (87.3%), 4-phase pipeline validated.
+
+### Run 11 — 4-Phase Model Test Set Evaluation 🔄 PENDING
+- **Fecha:** 2026-04-25
+- **Model:** TrOCR-small-printed 4-phase (Phase 2 → Phase 4 fine-tune)
+- **Test samples:** 99 (blocked, SHA-256 locked)
+- **Changes:** constrained decoding + preprocessing + temperature scaling (re-calibrated) + 4-phase pretrained weights
+
+| Metric | Run 8 (1-phase) | Run 9 (inference fixes) | **Run 11 (4-phase)** |
+|---|---|---|---|
+| EM@100% | 78.8% | 77.8% | **TBD** |
+| EM@80% | 87.3% | 84.8% | **TBD** |
+| EM@60% | 94.9% | 91.5% | **TBD** |
+| Val EM | 88.4% | — | **89.3%** |
+
+_Pending: download weights → recalibrate → eval test set_
+
 ---
 
 ## Decisiones clave
@@ -420,6 +496,12 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-22 | Full-res crops (v10 sin resize) | Roboflow 640×640 hacía bibs de 29×25px (ilegibles). Full-res: 209×180 avg. Labels: 655 (was 418), skips: 62 (was 285) |
 | 2026-04-22 | Custom training inviable (<1000 samples) | Best custom: 33% EM (spatial attention + 224×224). Modelos necesitan text-specific pretraining, no solo ImageNet |
 | 2026-04-22 | **TrOCR-small-printed = modelo OCR** | 88.4% EM con 444 train samples. Pretrained text features >> ImageNet. ADR rechazó TrOCR-large, small funciona perfecto |
+| 2026-04-24 | OCR reabierto — improvement ladder | Producción: bib 100→"111" con 86.6% conf. Plan: constrained decoding → preprocessing → calibration → 4-phase retrain → PARSeq → cloud fallback |
+| 2026-04-25 | Post-hoc inference fixes no mejoran accuracy | Constrained decoding + preprocessing + calibration: EM -1pp. Solo ayudan con calibración de confianza, no con reconocimiento |
+| 2026-04-25 | 4-phase pretraining: LR=5e-6/5e-5 para TODAS las fases | LR 1e-4/1e-3 destruye generación (raw=''). LR 5e-7/5e-6 no adapta (56% EM). Mismo LR que Run 6 funciona en todas las fases |
+| 2026-04-25 | No freezear encoder en fine-tune | SVHN digits ≠ bib crops. Freezear 6 capas encoder → 56% EM. Sin freeze → 89.3% EM |
+| 2026-04-25 | 50K subsample suficiente para pretraining | TrOCR ya sabe texto. No necesita 200K synthetic. 50K en 48min vs 200K timeout a 4h |
+| 2026-04-25 | **4-phase supera 1-phase: 89.3% vs 88.4% val EM** | Synthetic→SVHN pretraining da mejor base para fine-tune. Test set pending |
 
 ---
 
