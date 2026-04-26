@@ -457,20 +457,49 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** Download Phase 4 weights, recalibrate temperature, evaluate on locked test set. If EM@80% improves over Run 8 baseline (87.3%), 4-phase pipeline validated.
 
-### Run 11 — 4-Phase Model Test Set Evaluation 🔄 PENDING
+### Run 11 — 4-Phase Model Test Set Evaluation ✅
 - **Fecha:** 2026-04-25
-- **Model:** TrOCR-small-printed 4-phase (Phase 2 → Phase 4 fine-tune)
+- **Model:** TrOCR-small-printed 4-phase (synthetic→SVHN→finetune)
 - **Test samples:** 99 (blocked, SHA-256 locked)
-- **Changes:** constrained decoding + preprocessing + temperature scaling (re-calibrated) + 4-phase pretrained weights
+- **Inference:** constrained decoding (digit-only) + preprocessing gates + NO temperature scaling yet
+- **Script:** inline eval (calibrate_ocr.py had hardcoded path, eval run manually)
 
-| Metric | Run 8 (1-phase) | Run 9 (inference fixes) | **Run 11 (4-phase)** |
+| Metric | Run 8 (1-phase) | Run 9 (inference fixes) | **Run 11 (4-phase)** | Δ vs Run 8 |
+|---|---|---|---|---|
+| EM@100% | 78.8% | 77.8% | **76.8%** | -2.0pp |
+| **EM@80%** | **87.3%** | 84.8% | **88.6%** | **+1.3pp** |
+| **EM@60%** | **94.9%** | 91.5% | **98.3%** | **+3.4pp** |
+| ECE | — | 0.070 | **0.149** | — |
+| High-conf errors (>0.9) | 5 | 3 | **9** | +4 |
+| Val EM | 88.4% | — | **89.3%** | +0.9pp |
+
+**High-confidence errors (conf >0.9):**
+
+| GT | Pred | Conf | Error type |
 |---|---|---|---|
-| EM@100% | 78.8% | 77.8% | **TBD** |
-| EM@80% | 87.3% | 84.8% | **TBD** |
-| EM@60% | 94.9% | 91.5% | **TBD** |
-| Val EM | 88.4% | — | **89.3%** |
+| 190 | 194 | 0.998 | 1-digit sub (0→4) |
+| 009 | 069 | 0.994 | 1-digit sub (0→6) |
+| 95 | 25 | 0.968 | 1-digit sub (9→2) |
+| 88 | 86 | 0.964 | 1-digit sub (8→6) |
+| 84 | 94 | 0.961 | 1-digit sub (8→9) |
+| 053 | 105 | 0.948 | full rewrite |
+| 45 | 25 | 0.934 | 1-digit sub (4→2) |
+| 107 | 287 | 0.928 | full rewrite |
+| 59 | 39 | 0.902 | 1-digit sub (5→3) |
 
-_Pending: download weights → recalibrate → eval test set_
+**Observaciones:**
+
+- **EM@80% improved +1.3pp** (87.3%→88.6%) — 4-phase model makes better predictions within the accepted confidence range
+- **EM@60% jumped +3.4pp** (94.9%→98.3%) — much better at high-confidence predictions. Nearly perfect at 60% coverage
+- EM@100% dropped -2.0pp — more total errors (23 vs 21) but errors are concentrated in low-confidence zone
+- **High-confidence errors doubled (5→9)** — model is more overconfident. SVHN training may have increased confidence on wrong digit substitutions. Temperature scaling critical.
+- ECE is 0.149 (uncalibrated) — needs re-calibration on val set with 4-phase model
+- Error pattern: 1-digit substitutions dominate (similar digits: 0↔4, 0↔6, 9↔2, 8↔6, 8↔9)
+- Production test image (bib 100): still fails (→"178" at 59.6%) but would be rejected by threshold
+
+**Conclusión:** 4-phase pipeline improves EM@80% and EM@60% significantly. The model is more accurate when it's confident. But it's also more overconfident when wrong — temperature scaling is essential. Target 95% EM@80% not reached (88.6%).
+
+**Decisión:** Re-calibrate temperature on 4-phase model. If calibrated EM@80% improves further, document as best local model. Then proceed to PARSeq (Task 6) or cloud fallback (Task 7).
 
 ---
 
