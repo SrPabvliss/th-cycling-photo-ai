@@ -564,7 +564,74 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 - Estimated effort: 2-3 days additional development + training
 - Expected improvement: uncertain — architecture advantage (no AR bias) vs data disadvantage (fewer pretrained text samples than TrOCR)
 
-**Decisión:** PARSeq works but fine-tuning requires significant additional infrastructure. The 6.4pp gap to 95% EM@80% is a data problem (444 samples), not an architecture problem. Both TrOCR and PARSeq will hit the same data ceiling. Proceed to cloud fallback (Task 7) as the pragmatic production solution.
+**Decisión:** PARSeq installation solved. Proceed with fine-tuning to validate ADR-009's recommendation.
+
+### Run 13 — PARSeq 1-Phase Fine-tune ✅
+- **Fecha:** 2026-04-25
+- **Architecture:** PARSeq-base (23.8M params), decode_ar=False, charset="0123456789"
+- **Dataset:** 444 train / 112 val (fold_0), same as TrOCR Run 6
+- **LR:** encoder 5e-6, decoder 5e-5 (same as TrOCR)
+- **Result: 83.9% EM val** (vs TrOCR Run 6: 88.4%)
+- Time: 6.6 min
+
+**Observación:** PARSeq 1-phase underperforms TrOCR by 4.5pp. TrOCR has 2.5x more params and better pretrained text representation. PARSeq pretrained on 94-char scene text — less relevant to digit-only bibs without pretraining.
+
+### Run 14 — PARSeq 4-Phase Pretraining ✅ ⭐ BEST MODEL
+- **Fecha:** 2026-04-25
+- **Architecture:** PARSeq-base (23.8M params), decode_ar=False
+- **Script:** `scripts/modal_train_parseq_4phase.py`
+
+**Phase progression:**
+
+| Phase | Domain | Val EM | Time |
+|---|---|---|---|
+| Phase 1 (50K Synthetic) | Sport fonts | 68.2% | 16.0m |
+| Phase 2 (50K SVHN) | Real digits | **93.4%** | 10.9m |
+| Phase 4 (444 bib crops) | Real bibs | **90.2%** | 6.0m |
+
+**Test set results (99 samples, locked):**
+
+| Metric | TrOCR 1-ph (Run 8) | TrOCR 4-ph (Run 11b) | **PARSeq 4-ph (Run 14)** |
+|---|---|---|---|
+| EM@100% | 78.8% | 76.8% | **90.9%** |
+| **EM@80%** | **87.3%** | **88.6%** | **98.7% ✅ TARGET MET** |
+| EM@60% | 94.9% | 96.6% | **100.0%** |
+| ECE | — | 0.080 | **0.069** |
+| HC errors (>0.9) | 5 | 0 (calibrated) | 5 |
+| Total errors | 21 | 23 | **9** |
+| Params | 61.6M | 61.6M | **23.8M** |
+
+**Errors (only 9!):**
+
+| GT | Pred | Conf | Error type |
+|---|---|---|---|
+| 133 | 123 | 0.997 | 1-digit sub (3→2) |
+| 011 | 111 | 0.968 | 1-digit sub (0→1) |
+| 53 | 153 | 0.927 | digit insertion |
+| 55 | 65 | 0.908 | 1-digit sub (5→6) |
+| 62 | 52 | 0.903 | 1-digit sub (6→5) |
+| 204 | 007 | 0.840 | full rewrite |
+| 95 | 25 | 0.832 | 1-digit sub (9→2) |
+| 04 | 028 | 0.700 | digit insertion |
+| 174 | 178 | 0.696 | 1-digit sub (4→8) |
+
+**Key findings:**
+1. **ADR-009 was right.** PARSeq with decode_ar=False is the correct architecture for digit-only OCR
+2. **4-phase pretraining is critical for PARSeq.** 1-phase: 83.9% → 4-phase: 90.2% val EM (+6.3pp). TrOCR only gained +0.9pp from 4-phase
+3. **EM@80% = 98.7% — exceeds 95% target** by 3.7pp. First time hitting target.
+4. **EM@60% = 100%** — zero errors in top-60% confidence predictions
+5. **Only 9 errors** vs 21-23 for TrOCR — fundamentally better digit recognition
+6. **2.5x smaller model** (23.8M vs 61.6M) — faster inference, less memory
+7. **Already well-calibrated** (ECE 0.069) without temperature scaling
+8. Production test image (bib 100): still fails (→"12" at 0.689 conf) but correctly rejected by threshold
+
+**Why PARSeq wins:**
+- `decode_ar=False` predicts all positions in parallel — no autoregressive linguistic bias
+- No RoBERTa decoder — no wordpiece tokenization interfering with digit recognition
+- Smaller charset (13 tokens vs 64K) means all model capacity focused on digits
+- 4-phase pretraining builds strong digit representation that transfers perfectly to bibs
+
+**Decisión:** PARSeq 4-phase is the production OCR model. Replaces TrOCR. Target achieved: 98.7% EM@80% > 95%. Proceed to integrate into pipeline.
 
 ---
 
@@ -596,6 +663,10 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-25 | No freezear encoder en fine-tune | SVHN digits ≠ bib crops. Freezear 6 capas encoder → 56% EM. Sin freeze → 89.3% EM |
 | 2026-04-25 | 50K subsample suficiente para pretraining | TrOCR ya sabe texto. No necesita 200K synthetic. 50K en 48min vs 200K timeout a 4h |
 | 2026-04-25 | **4-phase supera 1-phase: 89.3% vs 88.4% val EM** | Synthetic→SVHN pretraining da mejor base para fine-tune. Test set pending |
+| 2026-04-25 | PARSeq installation blocker: `trust_repo=True` | Un parámetro faltante. Vendor model files evita pytorch_lightning dep |
+| 2026-04-25 | PARSeq 1-phase < TrOCR 1-phase (83.9% vs 88.4%) | PARSeq pretrained en scene text 94 chars, menos relevante sin pretraining |
+| 2026-04-25 | **PARSeq 4-phase = BEST MODEL: 98.7% EM@80%** | ADR-009 tenía razón. decode_ar=False + 4-phase + digit charset = target alcanzado |
+| 2026-04-25 | 4-phase más impactante para PARSeq (+6.3pp) que TrOCR (+0.9pp) | PARSeq necesita pretraining de dígitos; TrOCR ya tenía text pretrained |
 
 ---
 
