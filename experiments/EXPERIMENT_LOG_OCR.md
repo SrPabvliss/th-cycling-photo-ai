@@ -501,6 +501,35 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** Re-calibrate temperature on 4-phase model. If calibrated EM@80% improves further, document as best local model. Then proceed to PARSeq (Task 6) or cloud fallback (Task 7).
 
+### Run 11b — 4-Phase + Temperature Scaling (T=2.0) ✅
+- **Fecha:** 2026-04-25
+- **Model:** TrOCR-small-printed 4-phase + calibrated T=1.997
+- **Calibration:** Val EM 84.8%, ECE 0.095→0.063, high-conf errors 4→0 on val
+
+| Metric | Run 8 (1-phase) | Run 11 (4-phase) | **Run 11b (+cal)** | Δ vs Run 8 |
+|---|---|---|---|---|
+| EM@100% | 78.8% | 76.8% | **76.8%** | -2.0pp |
+| **EM@80%** | **87.3%** | **88.6%** | **88.6%** | **+1.3pp** |
+| **EM@60%** | **94.9%** | 98.3% | **96.6%** | **+1.7pp** |
+| ECE | — | 0.149 | **0.080** | — |
+| High-conf errors (>0.9) | 5 | 9 | **0** | **-5** |
+
+**Key result:** Temperature scaling (T=2.0) eliminated ALL high-confidence errors while preserving EM@80%. The model is now well-calibrated — confidence scores are honest.
+
+**Best model summary:**
+- EM@80% = **88.6%** (target 95% — gap of 6.4pp)
+- EM@60% = **96.6%** (near-perfect at 60% coverage)
+- **Zero** high-confidence hallucinations (was 5 in Run 8)
+- ECE = 0.080 (well-calibrated)
+
+**Remaining gap analysis:**
+- 23 errors total, all with conf < 0.89 (calibrated)
+- Error pattern: 1-digit substitutions (similar digits: 0↔4, 0↔6, 9↔2, 8↔6)
+- 2-digit bibs hardest (small crop, fewer context pixels)
+- Bottleneck: 444 training samples, model can't disambiguate similar digits
+
+**Decisión:** 4-phase + calibration is the best local model. EM@80% 88.6% — improved but 95% target unreachable with current data. Proceed to evaluate if PARSeq can help (Task 6), or document limits and implement cloud fallback (Task 7).
+
 ---
 
 ## Decisiones clave
