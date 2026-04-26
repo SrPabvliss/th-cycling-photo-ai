@@ -38,6 +38,7 @@ dependencies = [
     "psutil>=5.9.0",
     # Modal (training infra)
     "modal>=1.4.2",
+    "timm>=0.9.16",
 ]
 
 [project.optional-dependencies]

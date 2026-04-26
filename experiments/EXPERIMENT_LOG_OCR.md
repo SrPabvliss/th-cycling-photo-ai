@@ -530,6 +530,42 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 **Decisión:** 4-phase + calibration is the best local model. EM@80% 88.6% — improved but 95% target unreachable with current data. Proceed to evaluate if PARSeq can help (Task 6), or document limits and implement cloud fallback (Task 7).
 
+### Run 12 — PARSeq Investigation ✅
+- **Fecha:** 2026-04-25
+- **Architecture:** PARSeq-base (23.8M params) — ViT encoder + permutation-aware decoder
+- **Key feature:** `decode_ar=False` — parallel (non-autoregressive) decoding, no linguistic bias
+- **License:** Apache 2.0
+
+**Installation investigation:**
+
+| Attempt | Method | Result | Root cause |
+|---|---|---|---|
+| 1 (Apr 22) | `torch.hub.load('baudm/parseq', ...)` | ❌ Interactive prompt blocked | PyTorch 1.12+ asks "trust this repo?" — **fix: `trust_repo=True`** |
+| 2 (Apr 22) | strhub pip install | ❌ Version conflicts | pytorch_lightning + timm + nltk deps conflict with transformers<4.50 |
+| 3 (Apr 25) | torch.hub + trust_repo=True | ❌ Missing deps | Needs pytorch_lightning + timm (hubconf.py checks) |
+| **4 (Apr 25)** | **Vendor model files + timm** | **✅ WORKS** | Only needs torch + timm. No pytorch_lightning. |
+
+**What was the original blocker?** Two things:
+1. `torch.hub.load()` without `trust_repo=True` — one missing parameter
+2. `hubconf.py` declares `pytorch_lightning` as dependency but model code only needs `timm`
+
+**Solution:** Vendor 3 files from `baudm/parseq` repo (`model.py`, `modules.py`, `data/utils.py`) + one function (`init_weights`). Add `sys.path` to cached repo. Only real dependency: `timm>=0.9.16`.
+
+**Pretrained PARSeq (no fine-tune) on val set:**
+- **EM: 41.1% (46/112)** — expected, model trained on 94-char scene text, not cycling bibs
+- Errors: digit insertions (56→156), digit deletions (77→11), digit substitutions (064→964)
+- High-confidence errors common (conf>0.9 on wrong predictions)
+
+**Assessment for fine-tuning:**
+- PARSeq is 23.8M params (vs TrOCR 61.6M) — faster to train, less memory
+- `decode_ar=False` eliminates autoregressive linguistic bias (TrOCR's main weakness)
+- But: PARSeq uses 32×128 input (vs TrOCR 384×384) — bib crops need heavy downscaling
+- Fine-tuning would require: custom training loop (no HF Trainer), LMDB dataset adapter, same 4-phase pipeline
+- Estimated effort: 2-3 days additional development + training
+- Expected improvement: uncertain — architecture advantage (no AR bias) vs data disadvantage (fewer pretrained text samples than TrOCR)
+
+**Decisión:** PARSeq works but fine-tuning requires significant additional infrastructure. The 6.4pp gap to 95% EM@80% is a data problem (444 samples), not an architecture problem. Both TrOCR and PARSeq will hit the same data ceiling. Proceed to cloud fallback (Task 7) as the pragmatic production solution.
+
 ---
 
 ## Decisiones clave
