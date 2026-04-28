@@ -25,6 +25,12 @@ OCR_CROPS_DIR = OCR_DATA_DIR / "crops"
 OCR_SYNTHETIC_DIR = OCR_DATA_DIR / "synthetic"
 OCR_SVHN_DIR = OCR_DATA_DIR / "svhn"
 
+# Color data (Epic 3)
+COLOR_CONFIGS_DIR = CONFIGS_DIR / "color"
+COLOR_DATA_DIR = DATA_DIR / "color"
+COLOR_CROPS_DIR = COLOR_DATA_DIR / "crops"
+COLOR_LABELS_DIR = COLOR_DATA_DIR / "labels"
+
 # Experiments output
 EXPERIMENTS_DIR = PROJECT_ROOT / "experiments"
 
