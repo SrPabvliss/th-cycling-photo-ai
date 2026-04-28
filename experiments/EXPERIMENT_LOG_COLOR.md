@@ -38,8 +38,8 @@ Cronological log of color analysis experiments. Each entry documents: what we tr
 
 | Phase | Goal | Status |
 |---|---|---|
-| F0 | Module scaffold + deps + configs + docs | in progress |
-| F1 | Pipeline 7 stages (1-6, raw output) | pending |
+| F0 | Module scaffold + deps + configs + docs | done |
+| F1 | Pipeline 7 stages (1-6, raw output) | done |
 | F2 | Palette v1 referential + stage 7 mapping | pending |
 | F3 | Validation dataset (~200 crops via RF-DETR + manual labels) | pending |
 | F4 | Calibration: empirical centroids + grid search hyperparams | pending |
@@ -67,5 +67,29 @@ Cronological log of color analysis experiments. Each entry documents: what we tr
 **Decision:** follow same structure as ocr/ domain. No model training (algorithmic), so no `training/` subdirectory — `inference/` holds the analyzer.
 
 **Next:** F1 — implement pipeline stages 1-6 as pure functions.
+
+---
+
+### Run 1 — Pipeline stages 1-6 implemented (F1)
+
+**Date:** 2026-04-28
+
+**What:**
+- `color/inference/ports.py` — `IColorAnalyzer` Protocol, `ColorReading`, `ColorComponent`
+- `color/inference/pipeline_stages.py` — pure functions for ADR-012 stages 1-6
+- `color/inference/kmeans_analyzer.py` — `KMeansAnalyzer` orchestrator
+- 30 unit tests (`tests/color/test_pipeline_stages.py`) — all passing
+
+**Decision — skimage rgb2lab over cv2 cvtColor:** ADR-012 mandates skimage scale (L 0-100, a/b ±128) for direct ΔE_00 computation without rescaling. cv2 produces 0-255 with offset.
+
+**Decision — added `apply_gray_world` config flag (not in ADR-012):** Gray World assumes spatial average is achromatic. Synthetic monochrome test crops violate that assumption (per-channel means differ → algorithm pulls everything to gray, destroying chroma). Flag default `True` (production), tests use `False` for synthetic uniform crops. Real cycling crops have enough scene variance for Gray World to preserve dominant colors — verified via half-red/half-neutral test which passes with flag ON.
+
+**Decision — `MIN_VALID_PIXELS_FOR_CLUSTER = 100`:** ADR-012 §Etapa 3 safeguard. Below this, region is dominated by achromatics → return `[("acromatico", 1.0)]` and skip clustering.
+
+**Output at F1:** raw `(centroid_lab, proportion)` tuples. `ColorComponent.name` is empty until F2 adds palette mapping.
+
+**Tests:** 30/30 passing in 1.15s. Synthetic helpers `_solid_bgr` and `_noisy_bgr` generate test crops.
+
+**Next:** F2 — palette canonical (15 entries) + stage 7 mapping via min ΔE_00.
 
 ---
