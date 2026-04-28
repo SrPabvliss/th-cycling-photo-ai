@@ -249,3 +249,95 @@ K-Means runs only over the chromatic pool. Cluster proportions are rescaled by `
 **Output:** `experiments/color_run5_baseline/` (gitignored — summary persisted here).
 
 ---
+
+### Run 6 — Partition threshold sweep
+
+**Date:** 2026-04-28
+
+**What:** grid search over `chroma_min × lum_black_max × lum_white_min` (4 × 4 × 4 = 64 combinations) on the 191-crop validation set. Driven by Run 5 finding that the gris bucket was over-predicted and lum_black_max=25 was too low.
+
+**Search space:**
+- `chroma_min` ∈ {4, 6, 8, 10}
+- `lum_black_max` ∈ {25, 35, 40, 45}
+- `lum_white_min` ∈ {65, 70, 75, 80}
+
+**Best combination:**
+| param | value |
+|---|---|
+| chroma_min | 10 |
+| lum_black_max | 45 |
+| lum_white_min | 65 |
+| top1_accuracy | **0.398** |
+
+**Surprise:** `chroma_min=10` (the original ADR default) won — lower values let achromatic noise through and degraded performance. The fix was on the L* axis: widen the negro/blanco bands (from 25/80 to 45/65), narrow the gris band.
+
+**Per-class wins:**
+- `negro` recall 41.6% → 78.7% (+37 pts) — most matte-black gear (L 25-45) now correctly bucketed
+- `gris` over-prediction reduced (was 79 predicted vs 6 true → now 0 predicted, but at the cost of false negros for true grises — trade-off noted)
+
+**Per-class still failing (recall ~0):**
+- rojo, azul, amarillo, naranja, celeste, verde, morado, marron — chromatic colors. Diagnosis: not the partition; centroids.
+
+**Wall-clock:** 14 min for 64 combos.
+
+**Next:** Run 7 — empirical centroid calibration anchored to canonical PALETTE_LAB.
+
+---
+
+### Run 7 — Empirical palette calibration (anchored K-Means)
+
+**Date:** 2026-04-28
+
+**What:** for each labeled crop, K-Means over its chromatic pixels; pick the cluster closest to the canonical centroid for the labeled name (ΔE_00 < 30); aggregate via per-channel weighted median.
+
+**Two prior failed strategies (documented for thesis traceability):**
+1. **Pool-then-median** (all chromatic pixels per name): empirical rojo collapsed to (44, -2, 9) — close to neutral, dominated by background hues sharing the chromatic pool.
+2. **Largest-cluster-per-crop**: empirical rojo (36, -8, 13) — also negative a*. The largest cluster is often the BACKGROUND, not the labeled object (e.g. dirt ground occupies more pixels than the bicycle frame).
+
+**Anchored strategy** (final): for label "rojo", among the K-Means clusters of a "rojo bicycle" crop, select the one whose centroid is within ΔE_00 < 30 of canonical rojo. That cluster IS rojo (anchored), even if smaller than background. Aggregate the chosen cluster centroids across all crops with that label, weighted by cluster size.
+
+**Empirical centroids (final):**
+
+| name | canonical L*a*b* | empirical L*a*b* | n_crops |
+|---|---|---|---|
+| rojo | (47, 67, 50) | (32.7, 36.8, 12.4) | 27 |
+| naranja | (68, 45, 75) | (61.0, 2.8, 18.4) | 8 |
+| amarillo | (88, -10, 88) | (71.3, -21.3, 51.9) | 8 |
+| verde | (58, -55, 45) | (48.5, -10.3, 16.3) | 3 |
+| azul | (30, 30, -75) | (22.9, 5.7, -14.6) | 11 |
+| celeste | (78, -10, -25) | (70.0, -1.9, -27.0) | 4 |
+
+Reds and blues are darker and less saturated than canonical — consistent with cycling photographs (matte paint, outdoor lighting, partial shadow). Calibration FALLBACK to canonical for: morado, fucsia, marron, rosa, dorado, plateado (insufficient samples).
+
+**Eval (best Run 6 partition + empirical palette v2):**
+
+| Metric | Value | vs Run 6 | vs Baseline |
+|---|---|---|---|
+| Top-1 | 0.408 | +1.0 pt | +17.2 pt |
+| Top-2 recall | 0.343 | — | — |
+| Any-label match | **0.880** | +3.7 pt | +10.0 pt |
+| rojo precision | 1.000 | (was 0) | — |
+| rojo recall | 0.074 | (was 0) | — |
+| verde recall | 0.333 | — | — |
+
+**The structural gap (insight, important for thesis):**
+
+Per-class confusion shows chromatic colors still recall ~0% because they map to **negro** as top-1 (rojo→negro 20/27, azul→negro 9/11, etc.). The algorithm IS finding the chromatic component (`any_label_in_pred = 88%` confirms it), but the chromatic proportion is below the dark-background proportion in the crop pixels.
+
+**Mismatch:**
+- Labeler (Pablo) thinks of the **object** ("la bici es **rojo**" = the frame is red)
+- Algorithm measures the **whole crop image** (frame + dirt + shadow)
+
+For a typical "rojo" bicycle crop: 30% red frame + 50% dark dirt + 20% shadow → algorithm correctly returns `[(negro 0.5), (rojo 0.3), (gris 0.2)]` and predicts top1=negro. Label was top1=rojo. Mismatch.
+
+**This is not an algorithm bug — it is a measurement-vs-intent mismatch.** Three options to close the gap:
+
+1. **Foreground masking** — segment the object before color analysis (Roboflow already provides segmentation polygons in the dataset; could be wired to mask non-object pixels).
+2. **Re-define "top1" as crop-dominant** — relabel under the convention "what is the dominant color of the entire crop image, including background?" Top-1 metric becomes meaningful again, but loses the user-intuitive "the bike is rojo" semantics for query.
+3. **Switch headline metric to `any_label_in_pred`** — algorithm satisfies the user query "show me red bikes" if rojo is anywhere in the top-3, not necessarily top-1. Already at 88% under current calibration.
+
+**Decision pending Pablo:** option 1 (segmentation) is most rigorous; option 3 (any-match metric) is most pragmatic; option 2 (relabel) is a no-go (180+ crops to redo).
+
+**Latency:** p95 = 231ms still exceeds the 200ms SLA. Optimization deferred until algorithm decision is final.
+
+---
