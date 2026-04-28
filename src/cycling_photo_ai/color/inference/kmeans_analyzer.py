@@ -13,8 +13,10 @@ import time
 
 import numpy as np
 
+from cycling_photo_ai.color.palette.canonical import PALETTE_VERSION
 from cycling_photo_ai.shared.config import ColorAnalysisConfig
 
+from .palette_mapping import assign_palette_name, collapse_same_name
 from .pipeline_stages import (
     bgr_to_lab,
     cluster_kmeans,
@@ -107,15 +109,37 @@ class KMeansAnalyzer(IColorAnalyzer):
                 merged, tau_p=cfg.tau_proportion, max_colors=cfg.max_colors
             )
 
+            # Stage 7 — palette mapping
+            named: list[tuple[str, float, np.ndarray, float]] = []
+            for centroid, prop in top:
+                centroid_arr = np.asarray(centroid, dtype=np.float64)
+                name, delta_e = assign_palette_name(centroid_arr)
+                named.append((name, float(prop), centroid_arr, delta_e))
+
+            collapsed = collapse_same_name(named)
+            # Renormalize after collapse (proportions can sum < 1 when
+            # filter_and_truncate already normalized but collapse fuses none —
+            # keeping defensive renorm regardless).
+            total = sum(p for (_, p, _, _) in collapsed)
+            if total > 0:
+                collapsed = [(n, p / total, c, d) for (n, p, c, d) in collapsed]
+
             components = [
-                ColorComponent(name="", proportion=float(p), lab=np.asarray(c, dtype=np.float64))
-                for (c, p) in top
+                ColorComponent(
+                    name=name,
+                    proportion=prop,
+                    lab=centroid,
+                    delta_e_to_palette=delta_e,
+                    low_confidence=delta_e > cfg.low_confidence_de_threshold,
+                )
+                for (name, prop, centroid, delta_e) in collapsed
             ]
             return ColorReading(
                 status=STATUS_OK,
                 components=components,
                 processing_ms=(time.perf_counter() - t0) * 1000.0,
                 model_version=cfg.model_version,
+                palette_version=PALETTE_VERSION,
             )
 
         except (ValueError, RuntimeError) as exc:
