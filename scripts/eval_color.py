@@ -48,6 +48,10 @@ def main() -> None:
         "--show-wrong", action="store_true",
         help="Print every wrong prediction in the report",
     )
+    parser.add_argument(
+        "--palette", type=Path, default=None,
+        help="Optional calibrated palette YAML (e.g. experiments/color_run7/palette_v2.yaml)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -57,7 +61,13 @@ def main() -> None:
     crops = load_validation_set(region=args.region)
     print(f"Loaded {len(crops)} labeled crops from validation set\n")
 
-    analyzer = KMeansAnalyzer(cfg)
+    palette = None
+    if args.palette:
+        from cycling_photo_ai.color.palette.calibration import load_palette_yaml
+        palette = load_palette_yaml(args.palette)
+        print(f"Using calibrated palette from {args.palette}\n")
+
+    analyzer = KMeansAnalyzer(cfg, palette=palette)
     report = evaluate_analyzer(analyzer, crops)
 
     out_dir = EXPERIMENTS_DIR / f"color_{args.run_name}"

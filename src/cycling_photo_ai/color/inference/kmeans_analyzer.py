@@ -46,8 +46,20 @@ MIN_MEANINGFUL_PIXELS = 100
 class KMeansAnalyzer(IColorAnalyzer):
     """Full color pipeline (stages 1-7) with chromatic + achromatic partitioning."""
 
-    def __init__(self, config: ColorAnalysisConfig):
+    def __init__(
+        self,
+        config: ColorAnalysisConfig,
+        palette: dict[str, np.ndarray] | None = None,
+    ):
+        """
+        Args:
+            config: hyperparameter config.
+            palette: optional override centroid map. If None, uses canonical
+                PALETTE_LAB. Calibrated palettes from
+                cycling_photo_ai.color.palette.calibration go here.
+        """
         self.config = config
+        self.palette = palette  # None → canonical via assign_palette_name default
         self._loaded = True
 
     def is_loaded(self) -> bool:
@@ -123,11 +135,12 @@ class KMeansAnalyzer(IColorAnalyzer):
                     raw.append((np.asarray(c, dtype=np.float64), float(p) * chromatic_share))
 
             # ---- Achromatic buckets ------------------------------------------
+            achromatic_centroids = self.palette if self.palette is not None else PALETTE_LAB
             for name, count in achromatic_counts.items():
                 if count <= 0:
                     continue
                 prop_global = count / total_meaningful
-                raw.append((PALETTE_LAB[name].copy(), prop_global))
+                raw.append((achromatic_centroids[name].copy(), prop_global))
 
             # Stage 6 — merge close + filter + truncate
             # merge_close_centroids treats (centroids, proportions) ndarrays.
@@ -142,7 +155,7 @@ class KMeansAnalyzer(IColorAnalyzer):
             named: list[tuple[str, float, np.ndarray, float]] = []
             for centroid, prop in top:
                 centroid_arr = np.asarray(centroid, dtype=np.float64)
-                name, delta_e = assign_palette_name(centroid_arr)
+                name, delta_e = assign_palette_name(centroid_arr, palette=self.palette)
                 named.append((name, float(prop), centroid_arr, delta_e))
 
             collapsed = collapse_same_name(named)

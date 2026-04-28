@@ -15,14 +15,28 @@ from skimage.color import deltaE_ciede2000
 from cycling_photo_ai.color.palette.canonical import get_palette_matrix
 
 
-def assign_palette_name(centroid_lab: np.ndarray) -> tuple[str, float]:
-    """Assign the canonical palette name with minimum ΔE_00 to a centroid.
+def assign_palette_name(
+    centroid_lab: np.ndarray,
+    palette: dict[str, np.ndarray] | None = None,
+) -> tuple[str, float]:
+    """Assign the palette name with minimum ΔE_00 to a centroid.
 
-    Returns (name, delta_e). delta_e is the perceptual distance from the
-    centroid to the assigned palette reference (lower = better match).
+    Args:
+        centroid_lab: (3,) CIELAB centroid.
+        palette: optional override mapping {name: (3,) lab}. If None, uses
+            the canonical PALETTE_LAB (referential centroids). Calibrated
+            centroids from F4 Run 7 are passed in through this argument.
+
+    Returns:
+        (name, delta_e). delta_e is the perceptual distance to the assigned
+        palette reference (lower = better match).
     """
-    names, matrix = get_palette_matrix()
-    # Vectorized ΔE_00: reshape centroid to (1,1,3) and matrix to (1,N,3)
+    if palette is None:
+        names, matrix = get_palette_matrix()
+    else:
+        names = list(palette.keys())
+        matrix = np.stack([palette[n] for n in names], axis=0)
+
     centroid_grid = centroid_lab.reshape(1, 1, 3)
     palette_grid = matrix.reshape(1, -1, 3)
     distances = deltaE_ciede2000(centroid_grid, palette_grid)[0]  # (N,)
