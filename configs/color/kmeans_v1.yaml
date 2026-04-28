@@ -5,6 +5,8 @@ seed: 42
 chroma_min: 10.0
 lum_min: 15.0
 lum_max: 95.0
+# Illumination (etapa 2)
+apply_gray_world: true
 # Submuestreo (etapa 4)
 max_pixels: 20000
 # K-Means (etapa 5)

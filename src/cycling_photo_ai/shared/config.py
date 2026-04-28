@@ -164,6 +164,8 @@ class ColorAnalysisConfig(BaseModel):
     tau_de_fusion: float = 12.0
     tau_proportion: float = 0.08
     max_colors: int = 3
+    # Illumination correction (etapa 2)
+    apply_gray_world: bool = True
     # Validation (etapa 1)
     min_side_px: int = 32
     min_total_px: int = 1024
