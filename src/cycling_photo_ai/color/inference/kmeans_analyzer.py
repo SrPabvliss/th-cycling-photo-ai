@@ -1,10 +1,11 @@
-"""KMeansAnalyzer — orchestrates pipeline stages 1-6 producing raw centroids.
+"""KMeansAnalyzer — orchestrates the full ADR-012 pipeline (stages 1-7).
 
-Stage 7 (palette mapping) is added in F2 via composition with a PaletteMapper.
-At F1 the analyzer returns raw CIELAB centroids + proportions; the `name` field
-of each ColorComponent is left empty.
+Deviation from ADR-012: stage 3 partitions pixels into chromatic +
+achromatic buckets (negro / gris / blanco) rather than discarding the
+achromatic ones. K-Means runs only over the chromatic pool, then both
+result sets are merged with proportions over the meaningful total.
 
-Refs: ADR-012
+See EXPERIMENT_LOG_COLOR Run 4 for the rationale.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import time
 
 import numpy as np
 
-from cycling_photo_ai.color.palette.canonical import PALETTE_VERSION
+from cycling_photo_ai.color.palette.canonical import PALETTE_LAB, PALETTE_VERSION
 from cycling_photo_ai.shared.config import ColorAnalysisConfig
 
 from .palette_mapping import assign_palette_name, collapse_same_name
@@ -21,8 +22,8 @@ from .pipeline_stages import (
     bgr_to_lab,
     cluster_kmeans,
     filter_and_truncate,
-    filter_valid_pixels,
     merge_close_centroids,
+    partition_lab_pixels,
     subsample,
     validate_crop,
 )
@@ -37,17 +38,17 @@ from .ports import (
     IColorAnalyzer,
 )
 
-# Minimum valid pixels remaining after pre-filter for clustering to make sense.
-# Below this, the region is dominated by achromatic content (ADR-012 §Etapa 3).
-MIN_VALID_PIXELS_FOR_CLUSTER = 100
+# Below this many meaningful pixels (chromatic + achromatic) the crop is
+# effectively unusable — return STATUS_ACROMATIC_ONLY as a marker.
+MIN_MEANINGFUL_PIXELS = 100
 
 
 class KMeansAnalyzer(IColorAnalyzer):
-    """K-Means + post-process pipeline (ADR-012 stages 1-6 + raw output)."""
+    """Full color pipeline (stages 1-7) with chromatic + achromatic partitioning."""
 
     def __init__(self, config: ColorAnalysisConfig):
         self.config = config
-        self._loaded = True  # no model weights to load; ready immediately
+        self._loaded = True
 
     def is_loaded(self) -> bool:
         return self._loaded
@@ -68,14 +69,20 @@ class KMeansAnalyzer(IColorAnalyzer):
             # Stage 2
             lab = bgr_to_lab(crop_bgr, apply_gray_world=cfg.apply_gray_world)
 
-            # Stage 3
-            valid = filter_valid_pixels(
+            # Stage 3 — partition (chromatic + achromatic buckets)
+            partition = partition_lab_pixels(
                 lab,
                 chroma_min=cfg.chroma_min,
                 lum_min=cfg.lum_min,
                 lum_max=cfg.lum_max,
+                lum_black_max=cfg.lum_black_max,
+                lum_white_min=cfg.lum_white_min,
             )
-            if len(valid) < MIN_VALID_PIXELS_FOR_CLUSTER:
+            chromatic = partition["chromatic"]
+            achromatic_counts = partition["achromatic_counts"]
+            total_meaningful = partition["total_meaningful"]
+
+            if total_meaningful < MIN_MEANINGFUL_PIXELS:
                 return ColorReading(
                     status=STATUS_ACROMATIC_ONLY,
                     components=[
@@ -87,24 +94,46 @@ class KMeansAnalyzer(IColorAnalyzer):
                     ],
                     processing_ms=(time.perf_counter() - t0) * 1000.0,
                     model_version=cfg.model_version,
+                    palette_version=PALETTE_VERSION,
                 )
 
-            # Stage 4
-            sampled = subsample(valid, max_pixels=cfg.max_pixels, seed=cfg.seed)
+            # Build raw component list as (lab_centroid, proportion_global)
+            # — proportions are over total_meaningful so chromatic and
+            # achromatic share a common denominator.
+            raw: list[tuple[np.ndarray, float]] = []
 
-            # Stage 5
-            centroids, proportions = cluster_kmeans(
-                sampled,
-                k=cfg.k_initial,
-                n_init=cfg.n_init,
-                max_iter=cfg.max_iter,
-                seed=cfg.seed,
-                use_minibatch=cfg.use_minibatch,
-                minibatch_size=cfg.minibatch_size,
-            )
+            # ---- Chromatic: K-Means if enough pixels ---------------------------
+            if chromatic.shape[0] >= cfg.min_chromatic_for_cluster:
+                # Stage 4
+                sampled = subsample(chromatic, max_pixels=cfg.max_pixels, seed=cfg.seed)
+                # Stage 5
+                k_use = min(cfg.k_initial, sampled.shape[0])
+                centroids, props = cluster_kmeans(
+                    sampled,
+                    k=k_use,
+                    n_init=cfg.n_init,
+                    max_iter=cfg.max_iter,
+                    seed=cfg.seed,
+                    use_minibatch=cfg.use_minibatch,
+                    minibatch_size=cfg.minibatch_size,
+                )
+                # Convert local proportions (over chromatic) → global proportions
+                chromatic_share = chromatic.shape[0] / total_meaningful
+                for c, p in zip(centroids, props, strict=True):
+                    raw.append((np.asarray(c, dtype=np.float64), float(p) * chromatic_share))
 
-            # Stage 6
-            merged = merge_close_centroids(centroids, proportions, tau_de=cfg.tau_de_fusion)
+            # ---- Achromatic buckets ------------------------------------------
+            for name, count in achromatic_counts.items():
+                if count <= 0:
+                    continue
+                prop_global = count / total_meaningful
+                raw.append((PALETTE_LAB[name].copy(), prop_global))
+
+            # Stage 6 — merge close + filter + truncate
+            # merge_close_centroids treats (centroids, proportions) ndarrays.
+            centroids_arr = np.stack([c for c, _ in raw], axis=0)
+            props_arr = np.array([p for _, p in raw], dtype=np.float64)
+            merged = merge_close_centroids(centroids_arr, props_arr, tau_de=cfg.tau_de_fusion)
             top = filter_and_truncate(
                 merged, tau_p=cfg.tau_proportion, max_colors=cfg.max_colors
             )
@@ -117,9 +146,6 @@ class KMeansAnalyzer(IColorAnalyzer):
                 named.append((name, float(prop), centroid_arr, delta_e))
 
             collapsed = collapse_same_name(named)
-            # Renormalize after collapse (proportions can sum < 1 when
-            # filter_and_truncate already normalized but collapse fuses none —
-            # keeping defensive renorm regardless).
             total = sum(p for (_, p, _, _) in collapsed)
             if total > 0:
                 collapsed = [(n, p / total, c, d) for (n, p, c, d) in collapsed]

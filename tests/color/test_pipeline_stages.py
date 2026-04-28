@@ -17,6 +17,7 @@ from cycling_photo_ai.color.inference.pipeline_stages import (
     filter_valid_pixels,
     gray_world,
     merge_close_centroids,
+    partition_lab_pixels,
     subsample,
     validate_crop,
 )
@@ -164,6 +165,64 @@ class TestFilterValidPixels:
         valid = filter_valid_pixels(lab)
         assert valid.ndim == 2
         assert valid.shape[1] == 3
+
+
+# ---------------------------------------------------------------------------
+# Stage 3 (extended) — partition_lab_pixels
+# ---------------------------------------------------------------------------
+
+
+class TestPartitionLabPixels:
+    def test_pure_red_all_chromatic(self):
+        crop = _solid_bgr(32, 32, 0, 0, 220)
+        lab = bgr_to_lab(crop, apply_gray_world=False)
+        p = partition_lab_pixels(lab)
+        assert p["chromatic"].shape == (32 * 32, 3)
+        assert p["achromatic_counts"] == {"negro": 0, "gris": 0, "blanco": 0}
+        assert p["total_meaningful"] == 32 * 32
+
+    def test_pure_white_routed_to_blanco_bucket(self):
+        crop = _solid_bgr(32, 32, 250, 250, 250)
+        lab = bgr_to_lab(crop, apply_gray_world=False)
+        p = partition_lab_pixels(lab)
+        assert p["chromatic"].size == 0
+        assert p["achromatic_counts"]["blanco"] == 32 * 32
+        assert p["achromatic_counts"]["negro"] == 0
+        assert p["achromatic_counts"]["gris"] == 0
+
+    def test_pure_black_routed_to_negro_bucket(self):
+        crop = _solid_bgr(32, 32, 0, 0, 0)
+        lab = bgr_to_lab(crop, apply_gray_world=False)
+        p = partition_lab_pixels(lab, lum_min=0.0)
+        assert p["chromatic"].size == 0
+        assert p["achromatic_counts"]["negro"] == 32 * 32
+        assert p["achromatic_counts"]["blanco"] == 0
+
+    def test_mid_gray_routed_to_gris_bucket(self):
+        crop = _solid_bgr(32, 32, 128, 128, 128)
+        lab = bgr_to_lab(crop, apply_gray_world=False)
+        p = partition_lab_pixels(lab)
+        assert p["chromatic"].size == 0
+        assert p["achromatic_counts"]["gris"] == 32 * 32
+
+    def test_mixed_red_white_split(self):
+        red = _solid_bgr(32, 16, 30, 30, 200)
+        white = _solid_bgr(32, 16, 250, 250, 250)
+        crop = np.concatenate([red, white], axis=1)
+        lab = bgr_to_lab(crop, apply_gray_world=False)
+        p = partition_lab_pixels(lab)
+        # ~half chromatic (red), ~half white bucket
+        assert p["chromatic"].shape[0] > 400
+        assert p["achromatic_counts"]["blanco"] > 400
+        assert p["achromatic_counts"]["negro"] == 0
+
+    def test_specular_pixels_discarded(self):
+        crop = _solid_bgr(32, 32, 255, 255, 255)
+        lab = bgr_to_lab(crop, apply_gray_world=False)
+        p = partition_lab_pixels(lab, lum_max=99.0)
+        # L=100 → above 99 → discarded
+        assert p["total_meaningful"] == 0
+        assert p["discarded"] == 32 * 32
 
 
 # ---------------------------------------------------------------------------
@@ -346,13 +405,60 @@ class TestKMeansAnalyzer:
         max_a = max(c.lab[1] for c in reading.components)
         assert max_a > 30   # red preserved post Gray World
 
-    def test_white_crop_returns_acromatic(self, default_config):
+    def test_white_crop_returns_blanco(self, default_config):
+        # With chromatic+achromatic partition, a uniform white crop is no
+        # longer "acromatic_only" — it is dominantly white.
         crop = _solid_bgr(64, 64, 250, 250, 250)
         analyzer = KMeansAnalyzer(default_config)
         reading = analyzer.analyze(crop)
-        assert reading.status == STATUS_ACROMATIC_ONLY
+        assert reading.status == STATUS_OK
         assert len(reading.components) == 1
-        assert reading.components[0].name == "acromatico"
+        assert reading.components[0].name == "blanco"
+        assert reading.components[0].proportion == pytest.approx(1.0)
+
+    def test_black_crop_returns_negro(self, default_config):
+        crop = _solid_bgr(64, 64, 10, 10, 10)
+        analyzer = KMeansAnalyzer(default_config)
+        reading = analyzer.analyze(crop)
+        assert reading.status == STATUS_OK
+        assert reading.components[0].name == "negro"
+
+    def test_gray_crop_returns_gris(self, default_config):
+        crop = _solid_bgr(64, 64, 128, 128, 128)
+        analyzer = KMeansAnalyzer(default_config)
+        reading = analyzer.analyze(crop)
+        assert reading.status == STATUS_OK
+        assert reading.components[0].name == "gris"
+
+    def test_red_jersey_with_white_returns_both(self, no_graybalance_config):
+        # Realistic jersey: ~70% white + 30% red. Previous algorithm dropped
+        # white entirely; new partition reports BOTH. GW disabled because
+        # synthetic monochrome regions break its average-gray hypothesis.
+        red = _noisy_bgr(64, 24, 30, 30, 200, noise_std=8.0, seed=1)
+        white = _noisy_bgr(64, 40, 240, 240, 240, noise_std=4.0, seed=2)
+        crop = np.concatenate([red, white], axis=1)
+        analyzer = KMeansAnalyzer(no_graybalance_config)
+        reading = analyzer.analyze(crop)
+        assert reading.status == STATUS_OK
+        names = {c.name for c in reading.components}
+        assert "blanco" in names
+        assert "rojo" in names
+        # White is dominant
+        top1 = reading.components[0]
+        assert top1.name == "blanco"
+        assert top1.proportion > 0.5
+
+    def test_black_jersey_with_blue_stripes(self, no_graybalance_config):
+        # Skewed-channel input breaks Gray World; use no-GW config.
+        black = _noisy_bgr(64, 40, 12, 12, 12, noise_std=5.0, seed=3)
+        blue = _noisy_bgr(64, 24, 200, 30, 30, noise_std=10.0, seed=4)
+        crop = np.concatenate([black, blue], axis=1)
+        analyzer = KMeansAnalyzer(no_graybalance_config)
+        reading = analyzer.analyze(crop)
+        assert reading.status == STATUS_OK
+        names = {c.name for c in reading.components}
+        assert "negro" in names
+        assert "azul" in names
 
     def test_too_small_returns_insufficient(self, default_config):
         crop = _solid_bgr(16, 16, 0, 0, 220)

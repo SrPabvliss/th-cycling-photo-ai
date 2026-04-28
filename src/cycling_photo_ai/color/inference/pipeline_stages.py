@@ -69,27 +69,93 @@ def bgr_to_lab(crop_bgr: np.ndarray, apply_gray_world: bool = True) -> np.ndarra
 
 
 # ---------------------------------------------------------------------------
-# Stage 3 — Pre-filtering (chroma + luminance masks)
+# Stage 3 — Pixel partitioning (chromatic + achromatic buckets)
+#
+# Deviation from ADR-012 §Etapa 3: ADR-012 originally discarded all
+# achromatic pixels (chroma<10), keeping only chromatic ones for K-Means.
+# That made negro/gris/blanco — five of the 15 palette entries — almost
+# impossible to detect. In real cycling crops blacks and whites dominate
+# (jerseys, helmets). This partition routes each post-validation pixel to
+# either the chromatic pool (for K-Means) or one of three achromatic
+# buckets (negro / gris / blanco) by L*. Both contribute to the final
+# component list, with proportions normalized over the meaningful total
+# (chromatic + achromatic, excluding specular and sub-noise).
+#
+# See EXPERIMENT_LOG_COLOR Run 4 for the calibration impact.
 # ---------------------------------------------------------------------------
 
 
 def filter_valid_pixels(
     lab: np.ndarray,
     chroma_min: float = 10.0,
-    lum_min: float = 15.0,
+    lum_min: float = 5.0,
     lum_max: float = 95.0,
 ) -> np.ndarray:
-    """Discard achromatic, deep shadows, and specular pixels.
+    """Return flat (N, 3) array of CHROMATIC pixels only.
 
-    Returns a flat (N, 3) array of valid LAB pixels.
+    Kept for backward compatibility with stage tests. The analyzer now
+    uses partition_lab_pixels which also reports achromatic buckets.
+    """
+    L = lab[..., 0]
+    a = lab[..., 1]
+    b = lab[..., 2]
+    chroma = np.sqrt(a * a + b * b)
+    mask = (chroma >= chroma_min) & (L >= lum_min) & (L <= lum_max)
+    return lab[mask].reshape(-1, 3)
+
+
+def partition_lab_pixels(
+    lab: np.ndarray,
+    chroma_min: float = 10.0,
+    lum_min: float = 0.0,
+    lum_max: float = 99.0,
+    lum_black_max: float = 25.0,
+    lum_white_min: float = 80.0,
+) -> dict:
+    """Partition every pixel into one of: chromatic | negro | gris | blanco | discarded.
+
+    Returns:
+        {
+          "chromatic": (N, 3) ndarray of LAB pixels for K-Means,
+          "achromatic_counts": {"negro": int, "gris": int, "blanco": int},
+          "total_meaningful": int,   # sum chromatic + achromatic counts
+          "discarded": int,          # specular + sub-shadow
+        }
+
+    Routing logic (per pixel):
+        L < lum_min OR L > lum_max          → discard (specular / sub-shadow noise)
+        chroma >= chroma_min                → chromatic
+        L < lum_black_max                   → negro
+        L > lum_white_min                   → blanco
+        else (mid-luminance achromatic)     → gris
     """
     L = lab[..., 0]
     a = lab[..., 1]
     b = lab[..., 2]
     chroma = np.sqrt(a * a + b * b)
 
-    mask = (chroma >= chroma_min) & (L >= lum_min) & (L <= lum_max)
-    return lab[mask].reshape(-1, 3)
+    in_lum_range = (L >= lum_min) & (L <= lum_max)
+    is_chromatic = in_lum_range & (chroma >= chroma_min)
+    is_achromatic = in_lum_range & (chroma < chroma_min)
+
+    chromatic_pixels = lab[is_chromatic].reshape(-1, 3)
+
+    achr_L = L[is_achromatic]
+    n_negro = int(np.sum(achr_L < lum_black_max))
+    n_blanco = int(np.sum(achr_L > lum_white_min))
+    n_gris = int(achr_L.size) - n_negro - n_blanco
+
+    achromatic_counts = {"negro": n_negro, "gris": n_gris, "blanco": n_blanco}
+    total_meaningful = int(chromatic_pixels.shape[0]) + sum(achromatic_counts.values())
+    total_pixels = int(L.size)
+    discarded = total_pixels - total_meaningful
+
+    return {
+        "chromatic": chromatic_pixels,
+        "achromatic_counts": achromatic_counts,
+        "total_meaningful": total_meaningful,
+        "discarded": discarded,
+    }
 
 
 # ---------------------------------------------------------------------------

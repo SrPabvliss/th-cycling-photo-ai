@@ -1,10 +1,15 @@
 type: color_analysis
 name: kmeans_v1
 seed: 42
-# Pre-filtering (ADR-012 etapa 3)
+# Pre-filter / partition (ADR-012 etapa 3 — extended)
+# Pixels with chroma < chroma_min are routed to achromatic buckets (negro/gris/blanco)
+# instead of being discarded. See EXPERIMENT_LOG_COLOR Run 4 (deviation from ADR-012).
 chroma_min: 10.0
-lum_min: 15.0
-lum_max: 95.0
+lum_min: 0.0           # never discard low end; pure black routed to negro bucket
+lum_max: 99.0          # discard only true specular blowout
+lum_black_max: 25.0    # achromatic L < 25 → negro
+lum_white_min: 80.0    # achromatic L > 80 → blanco
+min_chromatic_for_cluster: 100
 # Illumination (etapa 2)
 apply_gray_world: true
 # Submuestreo (etapa 4)

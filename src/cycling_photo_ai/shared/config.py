@@ -148,10 +148,14 @@ class ColorAnalysisConfig(BaseModel):
 
     name: str = Field(description="Config identifier, e.g. 'kmeans_v1'")
     seed: int = 42
-    # Pre-filtering (etapa 3)
+    # Pre-filtering / partition (etapa 3 — extended for chromatic+achromatic split)
     chroma_min: float = 10.0
-    lum_min: float = 15.0
-    lum_max: float = 95.0
+    lum_min: float = 0.0          # 0 → never discard at low end; pure black → negro bucket
+    lum_max: float = 99.0         # discard L>99 (true specular blowout only)
+    lum_black_max: float = 25.0   # achromatic L below → negro
+    lum_white_min: float = 80.0   # achromatic L above → blanco
+    # Below this many chromatic pixels, skip K-Means and use achromatic-only output
+    min_chromatic_for_cluster: int = 100
     # Submuestreo (etapa 4)
     max_pixels: int = 20_000
     # K-Means (etapa 5)
