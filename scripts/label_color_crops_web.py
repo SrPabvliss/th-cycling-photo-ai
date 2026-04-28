@@ -236,8 +236,9 @@ def _html_form(row: dict, idx: int, total: int, labeled: int, skipped: int) -> s
                  background: #2a4a8a; color: #fff; font-size: 13px; font-weight: 600; }}
   .crop-wrap {{ background: #000; border-radius: 8px; padding: 16px;
                 display: flex; align-items: center; justify-content: center;
-                min-height: 320px; margin-bottom: 16px; }}
-  .crop-wrap img {{ max-width: 100%; max-height: 480px; border-radius: 4px; }}
+                height: 520px; margin-bottom: 16px; }}
+  .crop-wrap img {{ width: 100%; height: 100%; object-fit: contain;
+                    border-radius: 4px; image-rendering: auto; }}
   label.field {{ display: block; font-size: 13px; color: #aaa; margin: 12px 0 4px; }}
   select, input[type=text] {{
     width: 100%; padding: 10px; background: #2a2a2a; color: #fff;

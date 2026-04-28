@@ -18,6 +18,9 @@ PIPELINE_CONFIGS_DIR = CONFIGS_DIR / "pipeline"
 DATA_DIR = PROJECT_ROOT / "data"
 DATASET_V1_DIR = DATA_DIR / "v1"
 DATASET_V2_DIR = DATA_DIR / "v2"
+# Clean (no-augmentation) Roboflow export — single export per source image.
+# Used by OCR extraction and color extraction so labeling sees ORIGINAL images.
+CLEAN_DATASET_DIR = DATA_DIR / "ocr" / "clean_v10"
 
 # OCR data
 OCR_DATA_DIR = DATA_DIR / "ocr"
