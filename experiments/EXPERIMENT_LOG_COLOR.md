@@ -41,7 +41,7 @@ Cronological log of color analysis experiments. Each entry documents: what we tr
 | F0 | Module scaffold + deps + configs + docs | done |
 | F1 | Pipeline 7 stages (1-6, raw output) | done |
 | F2 | Palette v1 referential + stage 7 mapping | done |
-| F3 | Validation dataset (~200 crops via RF-DETR + manual labels) | pending |
+| F3 | Validation dataset (~200 crops via RF-DETR + manual labels) | tooling done, labeling pending |
 | F4 | Calibration: empirical centroids + grid search hyperparams | pending |
 | F5 | Ranking 3-level (DisMax + RRF) | pending |
 | F6 | Pipeline integration + endpoint | pending |
@@ -119,5 +119,38 @@ Cronological log of color analysis experiments. Each entry documents: what we tr
 4. Validate top-1 accuracy ≥ 90%
 
 **Next:** F3 — extract validation crops from `data/v2/yolo/` using RF-DETR-M, build CLI labeling tool.
+
+---
+
+### Run 3 — Validation dataset tooling (F3)
+
+**Date:** 2026-04-28
+
+**What:**
+- `scripts/extract_color_crops.py` — pulls ground-truth bboxes from `data/v2/yolo/{train,valid,test}/labels/*.txt` for classes 0 (bicycle), 5 (cyclist_clothes), 7 (helmet); writes crops to `data/color/crops/{region}/img_NNNNN.jpg`
+- `scripts/label_color_crops.py` — terminal + cv2 window labeling tool, JSONL output
+- `color/dataset/validation_set.py` — `ValidationCrop` dataclass + `load_validation_set()` + `label_distribution()`
+- 10 unit tests for the loader (tmp_path + monkeypatch)
+
+**Decision — GT YOLO labels instead of RF-DETR-M inference for crop sourcing:** original plan (per F0 phase doc) was to run RF-DETR-M on test images and crop from detections. Switched to GT bboxes because:
+1. Calibration measures color analyzer alone — detector noise would confound results
+2. Deterministic across runs (no model loading, no GPU)
+3. Faster iteration (no inference time)
+
+The pipeline integration (F6) will still consume detector output. Calibration set, however, isolates the algorithmic component being calibrated.
+
+**Decision — 8% padding (vs OCR's 12%):** color regions are larger; less context expansion needed. Same min-size filter as `ColorAnalysisConfig` (32px side, 1024 total) so every extracted crop is guaranteed to pass stage 1 validation.
+
+**Decision — JSONL labels (not CSV):** labels carry optional structured fields (top1, top2, notes) — JSONL handles nullability cleanly without empty-string ambiguity, and is append-friendly for incremental labeling.
+
+**Initial extraction run:**
+- Splits: train + valid + test
+- Candidates: 15,197 (bicycle: 2,398, cyclist_clothes: 8,983, helmet: 3,816)
+- After balancing (max 70/region, seed=42): 210 selected
+- After size filter: **157 crops** (52-53 per region, 53 skipped for being below 32px side)
+
+**Status:** tooling complete, manual labeling pending (Pablo, ~157 crops). After labeling, F4 calibration runs.
+
+**Next:** F4 — calibration runs (Run 4 baseline → Run 5 empirical centroids → Run 6 grid search).
 
 ---
