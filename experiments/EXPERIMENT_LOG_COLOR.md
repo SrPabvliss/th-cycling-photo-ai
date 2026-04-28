@@ -154,3 +154,46 @@ The pipeline integration (F6) will still consume detector output. Calibration se
 **Next:** F4 — calibration runs (Run 4 baseline → Run 5 empirical centroids → Run 6 grid search).
 
 ---
+
+### Run 4 — Algorithm deviation: chromatic + achromatic partitioning
+
+**Date:** 2026-04-28
+
+**Trigger:** during initial labeling on real cyclist clothes / helmets, Pablo flagged that real crops are dominated by **black, white, and gray** (jerseys with white sponsors, black helmets, gray frames). ADR-012 §Etapa 3 discards every pixel with chroma < 10 — five of the 15 palette entries (negro / gris / blanco / dorado / plateado are partially or fully achromatic) become near-undetectable. A jersey that is 70% white + 30% blue would, under the original algorithm, return only "azul" — silently losing the dominant signal.
+
+**Decision:** depart from ADR-012 §Etapa 3 and partition every post-validation pixel into one of:
+
+| Bucket | Condition |
+|---|---|
+| chromatic | chroma ≥ chroma_min (10) — clustered by K-Means |
+| blanco | chroma < 10 AND L > lum_white_min (80) |
+| negro | chroma < 10 AND L < lum_black_max (25) |
+| gris | chroma < 10 AND lum_black_max ≤ L ≤ lum_white_min |
+| discarded | L > lum_max (99) — true specular blowout only |
+
+K-Means runs only over the chromatic pool. Cluster proportions are rescaled by `chromatic_count / total_meaningful` so chromatic + achromatic share a common denominator. Achromatic buckets use canonical `PALETTE_LAB` centroids — no clustering required (they are already palette entries by definition).
+
+**Config changes:**
+- `lum_min`: 15 → 0 (pure black L=0 must reach the negro bucket)
+- `lum_max`: 95 → 99 (only true blowout discarded)
+- new fields: `lum_black_max=25`, `lum_white_min=80`, `min_chromatic_for_cluster=100`
+
+**Tests:** 85/85 passing. New cases:
+- white crop → top1 = "blanco" (1.0)
+- black crop → top1 = "negro"
+- gray crop → top1 = "gris"
+- mixed red + white synthetic jersey → top1 = "blanco", top2 = "rojo"
+- mixed black + blue synthetic jersey → both negro and azul detected
+
+**Trade-offs:**
+- (+) Five palette entries previously near-undetectable now reachable
+- (+) Algorithm matches what a human labeler perceives as dominant
+- (+) Calibration in F4-onwards measures a complete algorithm, not a mutilated one
+- (−) Departure from ADR-012 — must be documented in the thesis as a real-data informed correction; recommend updating ADR-012 once F4 confirms the partition improves accuracy
+- (−) Adds 4 hyperparameters (`lum_black_max`, `lum_white_min`, `lum_min` adjusted, `min_chromatic_for_cluster`) — included in F4 grid search
+
+**Labeling impact:** none. Pablo continues labeling what he sees (white, black, gray as legitimate top1 entries). Algorithm now matches the labeling intuition.
+
+**Next:** continue F3 labeling pass; F4 calibration depends on completed labels.
+
+---
