@@ -197,3 +197,55 @@ K-Means runs only over the chromatic pool. Cluster proportions are rescaled by `
 **Next:** continue F3 labeling pass; F4 calibration depends on completed labels.
 
 ---
+
+### Run 5 — Baseline measurement (F4)
+
+**Date:** 2026-04-28
+
+**What:** evaluate `kmeans_v1` (referential paleta + post-Run4 partition defaults) on the full labeled validation set.
+
+**Dataset:** 191 labeled crops (helmet 63, cyclist_clothes 62, bicycle 66). 12 skipped during labeling. Distribution heavily achromatic (negro 47%, blanco 16%, rojo 14%).
+
+**Config:** `configs/color/kmeans_v1.yaml` unchanged: chroma_min=10, lum_black_max=25, lum_white_min=80, tau_de_fusion=12, tau_proportion=0.08.
+
+**Results:**
+
+| Metric | Value | vs target |
+|---|---|---|
+| Top-1 accuracy | **0.236** | ≥0.90 (huge gap) |
+| Top-2 recall | 0.309 | — |
+| Top-3 recall | 0.219 | — |
+| Any-label match | 0.780 | (loose metric) |
+| Latency mean | 74.2 ms | ≤200ms ✓ |
+| Latency p95 | 240.1 ms | ≤200ms ⚠ |
+
+**Per-region top-1:**
+- helmet: 0.333
+- cyclist_clothes: 0.242
+- bicycle: 0.136
+
+**Per-class top-1 (top-supported classes):**
+- negro: precision 0.514, recall 0.416 (n=89)
+- blanco: precision 0.308, recall 0.133 (n=30)
+- rojo: precision 0.000, recall 0.000 (n=27) ❌
+- azul: precision 0.000, recall 0.000 (n=11) ❌
+- gris: precision 0.044, recall 0.667 (n=6) — over-predicted
+
+**Diagnosis (confusion matrix):**
+
+1. **`gris` over-classification:** 79 crops predicted as gris vs 6 true → algorithm dumps everything mid-luminance into gris bucket. negro→gris (41), blanco→gris (14), rojo→gris (14).
+2. **Chromatic colors lost to achromatic buckets:** rojo recall 0% — washed-out reds (chroma < 10) get routed to gris/negro. Same for azul, naranja, etc.
+3. **lum_black_max=25 too low:** dark colors with L=25-50 (typical for matte black helmets, dark gray frames) classified as gris instead of negro.
+4. **Latency p95 exceeds SLA:** 240ms vs 200ms target. Need to investigate — possibly outlier crops with very many chromatic pixels.
+
+**Decisions taken:**
+- `chroma_min=10` is the dominant cause of chromatic recall=0 — must lower to 4-6
+- `lum_black_max` should rise (25 → 35-40) to capture matte-black gear
+- `lum_white_min` should drop (80 → 70-75) to capture off-white jerseys
+- Empirical centroid calibration deferred to AFTER partition thresholds dialed (Run 6) — ordering matters because empirical centroids are computed from labeled chromatic crops, and we need correct chromatic-vs-achromatic routing first.
+
+**Next:** Run 6 — partition threshold sweep over (chroma_min, lum_black_max, lum_white_min).
+
+**Output:** `experiments/color_run5_baseline/` (gitignored — summary persisted here).
+
+---
