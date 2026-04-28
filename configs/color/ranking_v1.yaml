@@ -1,0 +1,13 @@
+type: ranking
+name: ranking_v1
+tau_delta_e: 10.0
+eta: 0.3
+tie: 0.3
+alpha_plate: 3.0
+gamma_mismatch: 0.5
+w_helmet: 1.0
+w_jersey: 1.0
+w_bike: 1.0
+generic_penalty: 0.7
+renormalize_on_missing: true
+rrf_k: 60

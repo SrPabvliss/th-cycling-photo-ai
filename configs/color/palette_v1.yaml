@@ -1,0 +1,5 @@
+type: palette
+name: palette_v1
+version: palette-v1
+centroids_path: null  # null → use referential PALETTE_LAB from canonical.py
+apply_refinement_rules: false

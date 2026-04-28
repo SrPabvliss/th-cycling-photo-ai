@@ -1,0 +1,25 @@
+type: color_analysis
+name: kmeans_v1
+seed: 42
+# Pre-filtering (ADR-012 etapa 3)
+chroma_min: 10.0
+lum_min: 15.0
+lum_max: 95.0
+# Submuestreo (etapa 4)
+max_pixels: 20000
+# K-Means (etapa 5)
+k_initial: 5
+n_init: 5
+max_iter: 100
+use_minibatch: false
+minibatch_size: 1024
+# Post-processing (etapa 6)
+tau_de_fusion: 12.0
+tau_proportion: 0.08
+max_colors: 3
+# Validation (etapa 1)
+min_side_px: 32
+min_total_px: 1024
+# Quality flags (etapa 7)
+low_confidence_de_threshold: 20.0
+model_version: kmeans-v1

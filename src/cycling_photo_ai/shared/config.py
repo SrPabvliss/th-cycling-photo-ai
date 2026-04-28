@@ -139,6 +139,66 @@ class OcrEvaluationConfig(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Color analysis configs (Epic 3 — ADR-011, ADR-012)
+# ---------------------------------------------------------------------------
+
+
+class ColorAnalysisConfig(BaseModel):
+    """K-Means + post-processing pipeline parameters (ADR-012)."""
+
+    name: str = Field(description="Config identifier, e.g. 'kmeans_v1'")
+    seed: int = 42
+    # Pre-filtering (etapa 3)
+    chroma_min: float = 10.0
+    lum_min: float = 15.0
+    lum_max: float = 95.0
+    # Submuestreo (etapa 4)
+    max_pixels: int = 20_000
+    # K-Means (etapa 5)
+    k_initial: int = 5
+    n_init: int = 5
+    max_iter: int = 100
+    use_minibatch: bool = False
+    minibatch_size: int = 1024
+    # Post-processing (etapa 6)
+    tau_de_fusion: float = 12.0
+    tau_proportion: float = 0.08
+    max_colors: int = 3
+    # Validation (etapa 1)
+    min_side_px: int = 32
+    min_total_px: int = 1024
+    # Quality flags (etapa 7)
+    low_confidence_de_threshold: float = 20.0
+    model_version: str = "kmeans-v1"
+
+
+class PaletteConfig(BaseModel):
+    """Canonical palette parameters."""
+
+    name: str = Field(description="Config identifier, e.g. 'palette_v1'")
+    version: str = "palette-v1"
+    centroids_path: str | None = None  # null → use referential PALETTE_LAB
+    apply_refinement_rules: bool = False  # opcional post-mapping rules
+
+
+class RankingConfig(BaseModel):
+    """Multi-region ranking parameters (ranking_methodology.md)."""
+
+    name: str = Field(description="Config identifier, e.g. 'ranking_v1'")
+    tau_delta_e: float = 10.0
+    eta: float = 0.3
+    tie: float = 0.3
+    alpha_plate: float = 3.0
+    gamma_mismatch: float = 0.5
+    w_helmet: float = 1.0
+    w_jersey: float = 1.0
+    w_bike: float = 1.0
+    generic_penalty: float = 0.7
+    renormalize_on_missing: bool = True
+    rrf_k: int = 60
+
+
+# ---------------------------------------------------------------------------
 # Inference config
 # ---------------------------------------------------------------------------
 
@@ -181,6 +241,9 @@ CONFIG_TYPES: dict[str, type[BaseModel]] = {
     "ppocr": PpOcrTrainingConfig,
     "ocr_evaluation": OcrEvaluationConfig,
     "pipeline": PipelineConfig,
+    "color_analysis": ColorAnalysisConfig,
+    "palette": PaletteConfig,
+    "ranking": RankingConfig,
 }
 
 

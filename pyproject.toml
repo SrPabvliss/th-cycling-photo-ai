@@ -36,6 +36,9 @@ dependencies = [
     "transformers>=4.40.0,<4.50.0",
     "sentencepiece>=0.2.1",
     "psutil>=5.9.0",
+    # Color analysis (Epic 3)
+    "opencv-python-headless>=4.10.0",
+    "scikit-image>=0.24.0",
     # Modal (training infra)
     "modal>=1.4.2",
     "timm>=0.9.16",
