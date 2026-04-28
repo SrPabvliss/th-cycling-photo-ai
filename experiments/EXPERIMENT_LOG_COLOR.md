@@ -40,7 +40,7 @@ Cronological log of color analysis experiments. Each entry documents: what we tr
 |---|---|---|
 | F0 | Module scaffold + deps + configs + docs | done |
 | F1 | Pipeline 7 stages (1-6, raw output) | done |
-| F2 | Palette v1 referential + stage 7 mapping | pending |
+| F2 | Palette v1 referential + stage 7 mapping | done |
 | F3 | Validation dataset (~200 crops via RF-DETR + manual labels) | pending |
 | F4 | Calibration: empirical centroids + grid search hyperparams | pending |
 | F5 | Ranking 3-level (DisMax + RRF) | pending |
@@ -91,5 +91,33 @@ Cronological log of color analysis experiments. Each entry documents: what we tr
 **Tests:** 30/30 passing in 1.15s. Synthetic helpers `_solid_bgr` and `_noisy_bgr` generate test crops.
 
 **Next:** F2 — palette canonical (15 entries) + stage 7 mapping via min ΔE_00.
+
+---
+
+### Run 2 — Palette v1 + stage 7 mapping (F2)
+
+**Date:** 2026-04-28
+
+**What:**
+- `color/palette/canonical.py` — `PALETTE_LAB` (15 entries), `PALETTE_NAMES`, `PALETTE_VERSION = "palette-v1"`, `get_palette_matrix()` for vectorized batch ΔE_00
+- `color/palette/synonyms.py` — `SYNONYM_MAP` (14 mappings), `normalize_query_color()`
+- `color/inference/palette_mapping.py` — `assign_palette_name()` + `collapse_same_name()`
+- `KMeansAnalyzer` extended: stage 7 mapping → `(name, prop, lab, delta_e)` per component, `low_confidence` flag, palette_version set
+
+**Decision — separate `palette_mapping.py` from `pipeline_stages.py`:** stages 1-6 are palette-agnostic (depend only on numpy + sklearn + skimage). Stage 7 imports the canonical palette. Keeping them separate allows swapping palettes (e.g., palette-v2 with empirical centroids) without touching clustering code.
+
+**Decision — `collapse_same_name` keeps dominant contributor's centroid (no weighted average):** when two raw centroids map to the same palette name, summing proportions but averaging centroids would shift the hue away from the dominant signal. Keeping the dominant centroid preserves perceptual fidelity for downstream ranking.
+
+**Decision — centroids stored as float64:** ΔE_00 numerical stability. skimage internally promotes anyway; explicit dtype avoids surprises.
+
+**Results:** 64/64 tests passing (30 stages + 34 palette/synonyms/E2E). End-to-end synthetic red crop maps to "rojo" (ΔE < 20). Self-match property: every palette entry maps back to itself with ΔE_00 = 0.
+
+**Calibration NOT yet performed.** Centroids are referential per `palette_specification.md`. F4 will:
+1. Build labeled validation set (~200 crops)
+2. Compute empirical centroids per name (proportion-weighted CIELAB mean)
+3. Replace referential values
+4. Validate top-1 accuracy ≥ 90%
+
+**Next:** F3 — extract validation crops from `data/v2/yolo/` using RF-DETR-M, build CLI labeling tool.
 
 ---
