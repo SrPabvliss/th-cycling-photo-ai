@@ -143,6 +143,7 @@ def build_app(metadata: list[dict], region_filter: str | None) -> FastAPI:
         action: str = Form(...),
         top1: str = Form(""),
         top2: str = Form(""),
+        top3: str = Form(""),
         notes: str = Form(""),
     ) -> RedirectResponse:
         if action == "back":
@@ -158,11 +159,13 @@ def build_app(metadata: list[dict], region_filter: str | None) -> FastAPI:
                 "region": region,
                 "top1": None,
                 "top2": None,
+                "top3": None,
                 "notes": "skipped",
             }
         else:  # save
             top1 = top1.strip()
             top2_clean = top2.strip() or None
+            top3_clean = top3.strip() or None
             if not top1:
                 return RedirectResponse("/", status_code=303)
             entry = {
@@ -170,6 +173,7 @@ def build_app(metadata: list[dict], region_filter: str | None) -> FastAPI:
                 "region": region,
                 "top1": top1,
                 "top2": top2_clean,
+                "top3": top3_clean,
                 "notes": notes.strip(),
             }
 
@@ -298,6 +302,14 @@ def _html_form(row: dict, idx: int, total: int, labeled: int, skipped: int) -> s
     </select>
     <div class="swatch-grid">
       {_palette_swatch_row("top2")}
+    </div>
+
+    <label class="field">Top 3 (tertiary color) — optional</label>
+    <select name="top3" id="top3">
+      {_palette_options("")}
+    </select>
+    <div class="swatch-grid">
+      {_palette_swatch_row("top3")}
     </div>
 
     <label class="field">Notes (optional)</label>

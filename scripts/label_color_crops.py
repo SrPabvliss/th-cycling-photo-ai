@@ -92,27 +92,32 @@ def show_crop(crop_path: Path, idx: int, total: int, region: str) -> None:
     cv2.waitKey(1)
 
 
-def parse_input(raw: str, normalize: bool) -> tuple[str, str | None, str] | str:
-    """Return (top1, top2|None, notes) or a control char ('s','u','q','h','a','n')."""
+def parse_input(
+    raw: str, normalize: bool
+) -> tuple[str, str | None, str | None, str] | str:
+    """Return (top1, top2|None, top3|None, notes) or a control char."""
     s = raw.strip()
     if not s:
-        return ("", None, "")
+        return ("", None, None, "")
     if s.lower() in {"s", "u", "q", "h", "n"}:
         return s.lower()
     if s.lower() == "a":
-        return (ACROMATIC, None, "")
+        return (ACROMATIC, None, None, "")
 
-    parts = [p.strip() for p in s.split(",", 2)]
+    parts = [p.strip() for p in s.split(",", 3)]
     top1 = parts[0]
-    top2 = parts[1] if len(parts) >= 2 else None
-    notes = parts[2] if len(parts) >= 3 else ""
+    top2 = parts[1] if len(parts) >= 2 and parts[1] else None
+    top3 = parts[2] if len(parts) >= 3 and parts[2] else None
+    notes = parts[3] if len(parts) >= 4 else ""
 
     if normalize:
         top1 = normalize_query_color(top1)
         if top2:
             top2 = normalize_query_color(top2)
+        if top3:
+            top3 = normalize_query_color(top3)
 
-    return (top1, top2, notes)
+    return (top1, top2, top3, notes)
 
 
 def main() -> None:
@@ -167,7 +172,7 @@ def main() -> None:
         result = parse_input(raw, normalize_on)
         if result == "h":
             print(f"  Palette: {', '.join(PALETTE_NAMES)}")
-            print("  Format: top1 | top1,top2 | top1,top2,notes")
+            print("  Format: top1 | top1,top2 | top1,top2,top3 | top1,top2,top3,notes")
             print("  Controls: a=acromatico, s=skip, u=undo, n=toggle normalize, q=quit, h=help")
             continue
         if result == "n":
@@ -181,6 +186,7 @@ def main() -> None:
                 "region": row["region"],
                 "top1": None,
                 "top2": None,
+                "top3": None,
                 "notes": "skipped",
             }
             save_labels(labels)
@@ -204,7 +210,7 @@ def main() -> None:
             print("Quit. Progress saved.")
             break
 
-        top1, top2, notes = result
+        top1, top2, top3, notes = result
         if not top1:
             print("  [empty input — try again or 's' to skip]")
             continue
@@ -214,12 +220,16 @@ def main() -> None:
         if top2 and top2 not in VALID_NAMES:
             print(f"  [invalid top2 '{top2}'. Try again.]")
             continue
+        if top3 and top3 not in VALID_NAMES:
+            print(f"  [invalid top3 '{top3}'. Try again.]")
+            continue
 
         labels[crop_file] = {
             "crop_file": crop_file,
             "region": row["region"],
             "top1": top1,
             "top2": top2 if top2 else None,
+            "top3": top3 if top3 else None,
             "notes": notes,
         }
         save_labels(labels)

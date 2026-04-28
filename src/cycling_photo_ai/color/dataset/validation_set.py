@@ -26,6 +26,7 @@ class ValidationCrop:
     region: str                  # helmet | cyclist_clothes | bicycle
     top1: str                    # canonical palette name (or "acromatico")
     top2: str | None             # optional 2nd dominant color
+    top3: str | None             # optional 3rd dominant color
     notes: str
     source_image: str
     source_split: str
@@ -108,6 +109,7 @@ def load_validation_set(
                 region=label["region"],
                 top1=label["top1"],
                 top2=label.get("top2"),
+                top3=label.get("top3"),
                 notes=label.get("notes", "") or "",
                 source_image=meta["source_image"],
                 source_split=meta["source_split"],

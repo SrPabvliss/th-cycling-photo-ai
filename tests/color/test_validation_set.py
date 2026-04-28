@@ -55,14 +55,14 @@ def fake_dataset(tmp_path: Path, monkeypatch) -> Path:
         writer.writeheader()
         writer.writerows(metadata_rows)
 
-    # labels.jsonl: one labeled, one skipped, one labeled top1+top2
+    # labels.jsonl: one labeled, one skipped, one labeled top1+top2+top3
     labels = [
         {"crop_file": "helmet/img_00000.jpg", "region": "helmet",
-         "top1": "rojo", "top2": None, "notes": ""},
+         "top1": "rojo", "top2": None, "top3": None, "notes": ""},
         {"crop_file": "bicycle/img_00001.jpg", "region": "bicycle",
-         "top1": None, "top2": None, "notes": "skipped"},
+         "top1": None, "top2": None, "top3": None, "notes": "skipped"},
         {"crop_file": "helmet/img_00002.jpg", "region": "helmet",
-         "top1": "azul", "top2": "blanco", "notes": "two-tone"},
+         "top1": "azul", "top2": "blanco", "top3": "negro", "notes": "tri-tone"},
     ]
     jsonl_path = labels_dir / "validation.jsonl"
     with open(jsonl_path, "w") as f:
@@ -100,12 +100,19 @@ class TestLoadValidationSet:
         assert crop.bbox == (10, 20, 100, 200)
         assert crop.source_split == "test"
 
-    def test_top2_preserved(self, fake_dataset):
+    def test_top2_top3_preserved(self, fake_dataset):
         crops = load_validation_set()
         crop = next(c for c in crops if c.top2 == "blanco")
         assert crop.top1 == "azul"
         assert crop.top2 == "blanco"
-        assert crop.notes == "two-tone"
+        assert crop.top3 == "negro"
+        assert crop.notes == "tri-tone"
+
+    def test_top3_optional(self, fake_dataset):
+        crops = load_validation_set()
+        crop = next(c for c in crops if c.crop_file == "helmet/img_00000.jpg")
+        assert crop.top2 is None
+        assert crop.top3 is None
 
     def test_sorted_by_crop_file(self, fake_dataset):
         crops = load_validation_set()
@@ -121,9 +128,9 @@ class TestLabelDistribution:
 
     def test_sorted_descending(self):
         crops = [
-            ValidationCrop("a", "helmet", "rojo", None, "", "x", "test", (0, 0, 1, 1)),
-            ValidationCrop("b", "helmet", "rojo", None, "", "x", "test", (0, 0, 1, 1)),
-            ValidationCrop("c", "helmet", "azul", None, "", "x", "test", (0, 0, 1, 1)),
+            ValidationCrop("a", "helmet", "rojo", None, None, "", "x", "test", (0, 0, 1, 1)),
+            ValidationCrop("b", "helmet", "rojo", None, None, "", "x", "test", (0, 0, 1, 1)),
+            ValidationCrop("c", "helmet", "azul", None, None, "", "x", "test", (0, 0, 1, 1)),
         ]
         hist = label_distribution(crops)
         assert list(hist.keys()) == ["rojo", "azul"]
