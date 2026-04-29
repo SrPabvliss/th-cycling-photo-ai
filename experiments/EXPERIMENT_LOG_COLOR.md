@@ -398,3 +398,58 @@ Top-1 still 46% — far below 90% target. Confusion analysis: rojo→negro 19/27
 **Awaiting Pablo's direction** on which of the three remaining levers to pursue.
 
 ---
+
+### Run 9 — Chromatic-priority top-1 rule (option 2)
+
+**Date:** 2026-04-28
+
+**Decision:** Pablo chose option 2. Implemented `_apply_chromatic_priority`: when a chromatic component reaches `chromatic_priority_threshold`, it is promoted ahead of achromatic components in top-1. Proportions unchanged; only ordering shifts. ACHROMATIC_PALETTE_NAMES = {negro, gris, blanco}; metallic (dorado, plateado) treated as chromatic.
+
+**Threshold sweep (full stack: best partition + empirical palette + mask):**
+
+| threshold | top-1 | any-match |
+|---|---|---|
+| 0.00 (disabled) | 0.461 | 0.927 |
+| 0.05 | 0.309 | 0.927 |
+| 0.10 | 0.314 | 0.927 |
+| 0.15 | 0.361 | 0.927 |
+| 0.20 | 0.414 | 0.927 |
+| 0.25 | 0.445 | 0.927 |
+| 0.30 | 0.456 | 0.927 |
+| **0.35** | **0.466** | 0.927 |
+| 0.40 | 0.461 | 0.927 |
+| 0.50 | 0.461 | 0.927 |
+
+Below 0.20 the rule over-promotes (small chromatic noise in achromatic-dominated crops gets crowned top-1). Above 0.35 the rule plateaus — most labeled crops simply do not have a chromatic component above 35% after masking.
+
+**Best (threshold=0.35):**
+- Top-1: **0.466** (+0.5 pt vs no rule)
+- Any-match: 0.927 (unchanged — rule only re-orders top-3)
+- cyclist_clothes top-1: **0.548** (highest region)
+- helmet top-1: 0.444
+- bicycle top-1: 0.409
+
+**Per-class shifts (vs Run 8):**
+- azul recall: 0.18 → 0.27 (small win)
+- amarillo precision: 1.00 → 1.00 (unchanged)
+- naranja recall: 0.13 → 0.13 (unchanged)
+
+**Honest assessment:** chromatic-priority is a small win on top of masking. The fundamental ceiling is structural: even in segmented helmet/jersey/bike crops, **dark structural elements** (visors, straps, trim, frame parts) are genuinely a large fraction of the masked pixels. Pablo's labeling convention names the **focal hue**, the algorithm measures **pixel proportions** — they only fully agree when the focal hue is also the pixel-dominant proportion.
+
+**Final stack (selected for productionization):**
+1. Stage 3 partition (chromatic + negro/gris/blanco buckets) — Run 4 deviation
+2. Best partition thresholds: chroma_min=10, lum_black_max=45, lum_white_min=65 — Run 6
+3. Empirical palette v2 (anchored K-Means) — Run 7
+4. Foreground masking via COCO segmentation — Run 8
+5. Chromatic-priority top-1, threshold=0.35 — Run 9
+
+Total: **23.6% → 46.6% top-1**, **78.0% → 92.7% any-match**.
+
+Latency p95 = 247 ms (over the 200 ms target — defer optimization to F5/F6).
+
+**Next:** Pablo's direction. Likely paths:
+- Switch ADR-011 headline metric to `any_label_in_pred ≥ 0.90` (currently 0.927 → exceeds target)
+- Or accept algorithm at this state and proceed to F5 (ranking) / F6 (pipeline integration)
+- Latency optimization (p95 247 → ≤200) needs a separate pass
+
+---
