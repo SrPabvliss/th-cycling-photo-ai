@@ -43,6 +43,51 @@ from .ports import (
 # effectively unusable — return STATUS_ACROMATIC_ONLY as a marker.
 MIN_MEANINGFUL_PIXELS = 100
 
+# Names treated as achromatic for the chromatic-priority top-1 rule.
+# Metallic finishes (dorado, plateado) keep chromatic status — they have
+# hue information that matters for matching ("dorado helmet" queries).
+ACHROMATIC_PALETTE_NAMES = frozenset({"negro", "gris", "blanco"})
+
+
+def _apply_chromatic_priority(
+    components: list[tuple[str, float, np.ndarray, float]],
+    threshold: float,
+) -> list[tuple[str, float, np.ndarray, float]]:
+    """Promote the strongest chromatic component to top-1 if its proportion
+    meets the threshold AND it is not already top-1.
+
+    Closes the labeler-vs-algorithm intent gap: Pablo labels the focal
+    hue ("the bike is red"), while raw proportion ranking surfaces dark
+    background-trim pixels. Promotion keeps the prediction aligned with
+    user-perceived dominant color when chromatic signal is non-trivial.
+
+    threshold == 0.0 disables the rule (returns components unchanged).
+    Proportions are NOT modified — only ordering changes.
+    """
+    if threshold <= 0.0 or not components:
+        return components
+
+    if components[0][0] not in ACHROMATIC_PALETTE_NAMES:
+        # Top-1 already chromatic — nothing to do.
+        return components
+
+    # Find the strongest chromatic component meeting the threshold.
+    best_idx: int | None = None
+    best_prop = -1.0
+    for i, (name, prop, _, _) in enumerate(components):
+        if name in ACHROMATIC_PALETTE_NAMES:
+            continue
+        if prop >= threshold and prop > best_prop:
+            best_idx = i
+            best_prop = prop
+
+    if best_idx is None:
+        return components
+
+    promoted = components[best_idx]
+    rest = [c for i, c in enumerate(components) if i != best_idx]
+    return [promoted, *rest]
+
 
 class KMeansAnalyzer(IColorAnalyzer):
     """Full color pipeline (stages 1-7) with chromatic + achromatic partitioning."""
@@ -191,6 +236,12 @@ class KMeansAnalyzer(IColorAnalyzer):
             total = sum(p for (_, p, _, _) in collapsed)
             if total > 0:
                 collapsed = [(n, p / total, c, d) for (n, p, c, d) in collapsed]
+
+            # Chromatic-priority top-1: promote a sufficiently strong
+            # chromatic component ahead of achromatic top-1.
+            collapsed = _apply_chromatic_priority(
+                collapsed, threshold=cfg.chromatic_priority_threshold
+            )
 
             components = [
                 ColorComponent(

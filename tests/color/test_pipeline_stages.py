@@ -431,9 +431,10 @@ class TestKMeansAnalyzer:
         assert reading.components[0].name == "gris"
 
     def test_red_jersey_with_white_returns_both(self, no_graybalance_config):
-        # Realistic jersey: ~70% white + 30% red. Previous algorithm dropped
-        # white entirely; new partition reports BOTH. GW disabled because
-        # synthetic monochrome regions break its average-gray hypothesis.
+        # Realistic jersey: ~70% white + 30% red. Both colors detected.
+        # Chromatic-priority rule (default threshold 0.25) promotes rojo
+        # to top-1 because 30% >= 25% — matches user intent ("the jersey
+        # has red on white").
         red = _noisy_bgr(64, 24, 30, 30, 200, noise_std=8.0, seed=1)
         white = _noisy_bgr(64, 40, 240, 240, 240, noise_std=4.0, seed=2)
         crop = np.concatenate([red, white], axis=1)
@@ -443,10 +444,8 @@ class TestKMeansAnalyzer:
         names = {c.name for c in reading.components}
         assert "blanco" in names
         assert "rojo" in names
-        # White is dominant
-        top1 = reading.components[0]
-        assert top1.name == "blanco"
-        assert top1.proportion > 0.5
+        # Chromatic-priority promotes rojo over blanco
+        assert reading.components[0].name == "rojo"
 
     def test_black_jersey_with_blue_stripes(self, no_graybalance_config):
         # Skewed-channel input breaks Gray World; use no-GW config.
@@ -476,3 +475,77 @@ class TestKMeansAnalyzer:
     def test_is_loaded_true(self, default_config):
         analyzer = KMeansAnalyzer(default_config)
         assert analyzer.is_loaded()
+
+
+class TestChromaticPriority:
+    """Top-1 promotion of strong chromatic components over achromatic ones."""
+
+    def test_promotion_when_threshold_met(self):
+        from cycling_photo_ai.color.inference.kmeans_analyzer import (
+            _apply_chromatic_priority,
+        )
+        comps = [
+            ("negro", 0.55, np.array([5.0, 0.0, 0.0]), 0.0),
+            ("rojo", 0.30, np.array([47.0, 67.0, 50.0]), 1.0),
+            ("blanco", 0.15, np.array([96.0, 0.0, 0.0]), 0.0),
+        ]
+        out = _apply_chromatic_priority(comps, threshold=0.25)
+        assert out[0][0] == "rojo"   # promoted
+        # Negro retains its proportion, just demoted in order
+        assert any(c[0] == "negro" and c[1] == 0.55 for c in out)
+
+    def test_no_promotion_below_threshold(self):
+        from cycling_photo_ai.color.inference.kmeans_analyzer import (
+            _apply_chromatic_priority,
+        )
+        comps = [
+            ("negro", 0.80, np.array([5.0, 0.0, 0.0]), 0.0),
+            ("rojo", 0.20, np.array([47.0, 67.0, 50.0]), 1.0),
+        ]
+        out = _apply_chromatic_priority(comps, threshold=0.25)
+        assert out[0][0] == "negro"
+
+    def test_no_promotion_when_top1_already_chromatic(self):
+        from cycling_photo_ai.color.inference.kmeans_analyzer import (
+            _apply_chromatic_priority,
+        )
+        comps = [
+            ("rojo", 0.50, np.array([47.0, 67.0, 50.0]), 1.0),
+            ("negro", 0.50, np.array([5.0, 0.0, 0.0]), 0.0),
+        ]
+        out = _apply_chromatic_priority(comps, threshold=0.25)
+        assert out[0][0] == "rojo"
+
+    def test_threshold_zero_disables_rule(self):
+        from cycling_photo_ai.color.inference.kmeans_analyzer import (
+            _apply_chromatic_priority,
+        )
+        comps = [
+            ("negro", 0.55, np.array([5.0, 0.0, 0.0]), 0.0),
+            ("rojo", 0.45, np.array([47.0, 67.0, 50.0]), 1.0),
+        ]
+        out = _apply_chromatic_priority(comps, threshold=0.0)
+        assert out[0][0] == "negro"
+
+    def test_strongest_chromatic_picked_when_multiple(self):
+        from cycling_photo_ai.color.inference.kmeans_analyzer import (
+            _apply_chromatic_priority,
+        )
+        comps = [
+            ("negro", 0.55, np.array([5.0, 0.0, 0.0]), 0.0),
+            ("rojo", 0.25, np.array([47.0, 67.0, 50.0]), 1.0),
+            ("azul", 0.20, np.array([30.0, 30.0, -75.0]), 1.0),
+        ]
+        out = _apply_chromatic_priority(comps, threshold=0.20)
+        assert out[0][0] == "rojo"
+
+    def test_dorado_plateado_treated_as_chromatic(self):
+        from cycling_photo_ai.color.inference.kmeans_analyzer import (
+            _apply_chromatic_priority,
+        )
+        comps = [
+            ("negro", 0.55, np.array([5.0, 0.0, 0.0]), 0.0),
+            ("dorado", 0.30, np.array([73.0, 8.0, 65.0]), 1.0),
+        ]
+        out = _apply_chromatic_priority(comps, threshold=0.25)
+        assert out[0][0] == "dorado"

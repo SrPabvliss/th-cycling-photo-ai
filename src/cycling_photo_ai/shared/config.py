@@ -175,6 +175,11 @@ class ColorAnalysisConfig(BaseModel):
     min_total_px: int = 1024
     # Quality flags (etapa 7)
     low_confidence_de_threshold: float = 20.0
+    # Chromatic-priority top-1: when a chromatic component reaches this
+    # proportion, it is promoted ahead of achromatic components. Aligns
+    # algorithm output with user intent ("the bike is red" — focal hue,
+    # not pixel-dominant). 0.0 disables the rule.
+    chromatic_priority_threshold: float = 0.25
     model_version: str = "kmeans-v1"
 
 
