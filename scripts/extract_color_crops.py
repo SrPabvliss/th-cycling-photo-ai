@@ -24,10 +24,11 @@ import argparse
 import csv
 import json
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from cycling_photo_ai.shared.paths import CLEAN_DATASET_DIR, COLOR_CROPS_DIR
 
@@ -44,6 +45,7 @@ class CropCandidate:
     region: str
     bbox_xywh: tuple[int, int, int, int]  # COCO bbox format (x, y, w, h) abs pixels
     split: str
+    polygons: list[list[float]]  # COCO segmentation polygons (each: flat [x,y,x,y,...])
 
 
 def collect_candidates(coco_root: Path, splits: list[str]) -> list[CropCandidate]:
@@ -75,12 +77,16 @@ def collect_candidates(coco_root: Path, splits: list[str]) -> list[CropCandidate
                 continue
 
             x, y, w, h = ann["bbox"]
+            seg = ann.get("segmentation") or []
+            if not isinstance(seg, list):
+                seg = []   # RLE format → skip mask, fall back to bbox-only
             candidates.append(
                 CropCandidate(
                     image_path=image_path,
                     region=id2name[ann["category_id"]],
                     bbox_xywh=(int(x), int(y), int(w), int(h)),
                     split=split,
+                    polygons=seg,
                 )
             )
             n_split += 1
@@ -90,10 +96,31 @@ def collect_candidates(coco_root: Path, splits: list[str]) -> list[CropCandidate
     return candidates
 
 
+def _rasterize_polygons_to_mask(
+    polygons: list[list[float]], img_h: int, img_w: int
+) -> np.ndarray:
+    """Rasterize COCO polygon list into a uint8 mask (255 inside, 0 outside)."""
+    mask = np.zeros((img_h, img_w), dtype=np.uint8)
+    for poly in polygons:
+        if len(poly) < 6 or len(poly) % 2 != 0:
+            continue
+        pts = np.array(poly, dtype=np.float32).reshape(-1, 2)
+        pts_int = np.round(pts).astype(np.int32)
+        cv2.fillPoly(mask, [pts_int], 255)
+    return mask
+
+
 def extract_crop(
-    image_path: Path, bbox_xywh: tuple[int, int, int, int], padding: float
+    image_path: Path,
+    bbox_xywh: tuple[int, int, int, int],
+    padding: float,
+    polygons: list[list[float]] | None = None,
 ) -> tuple | None:
-    """Read image, expand bbox by padding ratio, return (crop, abs_bbox)."""
+    """Read image, expand bbox by padding, return (crop, mask_or_none, abs_bbox).
+
+    mask is uint8 (255 = object, 0 = background) cropped to the same bbox as
+    the image. None when polygons are missing or invalid.
+    """
     img = cv2.imread(str(image_path))
     if img is None:
         return None
@@ -118,7 +145,15 @@ def extract_crop(
     if min(ch, cw) < MIN_CROP_SIDE_PX or (ch * cw) < MIN_CROP_TOTAL_PX:
         return None
 
-    return crop, (px1, py1, px2, py2)
+    mask_crop: np.ndarray | None = None
+    if polygons:
+        full_mask = _rasterize_polygons_to_mask(polygons, h, w)
+        mask_crop = full_mask[py1:py2, px1:px2]
+        # Reject mask if essentially empty inside the crop
+        if int(mask_crop.sum()) == 0:
+            mask_crop = None
+
+    return crop, mask_crop, (px1, py1, px2, py2)
 
 
 def balance_per_region(
@@ -188,22 +223,32 @@ def main() -> None:
     metadata_rows: list[dict] = []
     crop_id = 0
     skipped = 0
+    n_with_mask = 0
 
     print(f"\nExtracting crops (padding={PADDING_RATIO}):")
     for cand in selected:
-        result = extract_crop(cand.image_path, cand.bbox_xywh, PADDING_RATIO)
+        result = extract_crop(cand.image_path, cand.bbox_xywh, PADDING_RATIO, cand.polygons)
         if result is None:
             skipped += 1
             continue
-        crop, (px1, py1, px2, py2) = result
+        crop, mask_crop, (px1, py1, px2, py2) = result
 
         crop_name = f"img_{crop_id:05d}.jpg"
         crop_path = output_dir / cand.region / crop_name
         cv2.imwrite(str(crop_path), crop)
 
+        mask_file = ""
+        if mask_crop is not None:
+            mask_name = f"img_{crop_id:05d}_mask.png"
+            mask_path = output_dir / cand.region / mask_name
+            cv2.imwrite(str(mask_path), mask_crop)
+            mask_file = f"{cand.region}/{mask_name}"
+            n_with_mask += 1
+
         metadata_rows.append({
             "crop_id": crop_id,
             "crop_file": f"{cand.region}/{crop_name}",
+            "mask_file": mask_file,
             "region": cand.region,
             "source_image": cand.image_path.name,
             "source_split": cand.split,
@@ -227,7 +272,7 @@ def main() -> None:
             writer.writerows(metadata_rows)
 
     print(f"\n{'=' * 60}")
-    print(f"Extracted: {crop_id} crops")
+    print(f"Extracted: {crop_id} crops ({n_with_mask} with masks)")
     print(f"Skipped: {skipped} (below {MIN_CROP_SIDE_PX}px side or invalid)")
     print(f"Metadata: {metadata_path}")
     print(f"\nNext: uv run python scripts/label_color_crops_web.py")

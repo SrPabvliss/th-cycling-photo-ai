@@ -51,11 +51,15 @@ class ColorReading:
 class IColorAnalyzer(Protocol):
     """Port: any color analyzer must implement this interface."""
 
-    def analyze(self, crop_bgr: np.ndarray) -> ColorReading:
+    def analyze(
+        self, crop_bgr: np.ndarray, mask: np.ndarray | None = None
+    ) -> ColorReading:
         """Analyze a cropped image (BGR uint8) and return dominant colors.
 
         Args:
             crop_bgr: Cropped region as numpy array (H, W, 3) BGR uint8.
+            mask: Optional H×W uint8 mask (255=foreground, 0=background).
+                Pixels where mask==0 are excluded before color analysis.
 
         Returns:
             ColorReading with status and up to N dominant colors mapped to palette.

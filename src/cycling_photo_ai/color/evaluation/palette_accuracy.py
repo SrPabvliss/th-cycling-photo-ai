@@ -68,8 +68,17 @@ class EvaluationReport:
 def evaluate_analyzer(
     analyzer: IColorAnalyzer,
     crops: list[ValidationCrop],
+    use_mask: bool = False,
 ) -> EvaluationReport:
-    """Run analyzer over every labeled crop and compute aggregate metrics."""
+    """Run analyzer over every labeled crop and compute aggregate metrics.
+
+    Args:
+        analyzer: IColorAnalyzer implementation.
+        crops: labeled validation crops.
+        use_mask: when True, pass each crop's segmentation mask to the
+            analyzer (foreground-only analysis). Crops without a mask
+            fall back to whole-crop analysis.
+    """
     predictions: list[CropPrediction] = []
     confusion: dict[str, dict[str, int]] = {}
     per_region_correct: dict[str, int] = {}
@@ -83,8 +92,10 @@ def evaluate_analyzer(
         except FileNotFoundError:
             continue
 
+        mask = crop.load_mask() if use_mask else None
+
         t0 = time.perf_counter()
-        reading = analyzer.analyze(img)
+        reading = analyzer.analyze(img, mask=mask) if use_mask else analyzer.analyze(img)
         elapsed_ms = (time.perf_counter() - t0) * 1000.0
         processing_times.append(elapsed_ms)
 

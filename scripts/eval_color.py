@@ -52,6 +52,10 @@ def main() -> None:
         "--palette", type=Path, default=None,
         help="Optional calibrated palette YAML (e.g. experiments/color_run7/palette_v2.yaml)",
     )
+    parser.add_argument(
+        "--use-mask", action="store_true",
+        help="Apply segmentation mask before analysis (foreground-only)",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -68,7 +72,7 @@ def main() -> None:
         print(f"Using calibrated palette from {args.palette}\n")
 
     analyzer = KMeansAnalyzer(cfg, palette=palette)
-    report = evaluate_analyzer(analyzer, crops)
+    report = evaluate_analyzer(analyzer, crops, use_mask=args.use_mask)
 
     out_dir = EXPERIMENTS_DIR / f"color_{args.run_name}"
     out_dir.mkdir(parents=True, exist_ok=True)

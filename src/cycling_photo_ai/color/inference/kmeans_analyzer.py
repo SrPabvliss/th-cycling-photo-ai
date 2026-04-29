@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 
+import cv2
 import numpy as np
 
 from cycling_photo_ai.color.palette.canonical import PALETTE_LAB, PALETTE_VERSION
@@ -65,7 +66,18 @@ class KMeansAnalyzer(IColorAnalyzer):
     def is_loaded(self) -> bool:
         return self._loaded
 
-    def analyze(self, crop_bgr: np.ndarray) -> ColorReading:
+    def analyze(
+        self, crop_bgr: np.ndarray, mask: np.ndarray | None = None
+    ) -> ColorReading:
+        """Analyze a crop, optionally masked.
+
+        Args:
+            crop_bgr: H×W×3 BGR uint8 image.
+            mask: optional H×W uint8 mask. Pixels where mask==0 are treated
+                as if they did not exist (excluded before partitioning).
+                Use to focus the analysis on the segmented object and
+                ignore crop background.
+        """
         cfg = self.config
         t0 = time.perf_counter()
 
@@ -80,6 +92,23 @@ class KMeansAnalyzer(IColorAnalyzer):
         try:
             # Stage 2
             lab = bgr_to_lab(crop_bgr, apply_gray_world=cfg.apply_gray_world)
+
+            # Apply foreground mask BEFORE partition: drop background pixels
+            # entirely so they don't pollute either chromatic or achromatic
+            # buckets. This addresses the labeler-vs-algorithm mismatch
+            # (Pablo labels the object, algorithm measures whole crop).
+            if mask is not None:
+                if mask.shape[:2] != lab.shape[:2]:
+                    mask = cv2.resize(
+                        mask, (lab.shape[1], lab.shape[0]),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                fg = mask > 0
+                if fg.sum() < cfg.min_total_px:
+                    # Mask too tight → fall back to full crop
+                    pass
+                else:
+                    lab = lab[fg].reshape(-1, 1, 3)
 
             # Stage 3 — partition (chromatic + achromatic buckets)
             partition = partition_lab_pixels(

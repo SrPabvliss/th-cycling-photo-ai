@@ -31,16 +31,30 @@ class ValidationCrop:
     source_image: str
     source_split: str
     bbox: tuple[int, int, int, int]  # x1, y1, x2, y2
+    mask_file: str | None = None  # e.g. "helmet/img_00012_mask.png" — None if no polygon
 
     @property
     def absolute_path(self) -> Path:
         return COLOR_CROPS_DIR / self.crop_file
+
+    @property
+    def mask_path(self) -> Path | None:
+        if not self.mask_file:
+            return None
+        return COLOR_CROPS_DIR / self.mask_file
 
     def load_bgr(self) -> np.ndarray:
         img = cv2.imread(str(self.absolute_path))
         if img is None:
             raise FileNotFoundError(f"Cannot read crop: {self.absolute_path}")
         return img
+
+    def load_mask(self) -> np.ndarray | None:
+        """Return uint8 mask (255 inside object, 0 outside), or None if absent."""
+        path = self.mask_path
+        if path is None or not path.exists():
+            return None
+        return cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
 
 
 def _load_metadata() -> dict[str, dict]:
@@ -103,6 +117,7 @@ def load_validation_set(
         meta = metadata.get(crop_file)
         if meta is None:
             continue
+        mask_file = (meta.get("mask_file") or "").strip() or None
         crops.append(
             ValidationCrop(
                 crop_file=crop_file,
@@ -119,6 +134,7 @@ def load_validation_set(
                     int(meta["bbox_x2"]),
                     int(meta["bbox_y2"]),
                 ),
+                mask_file=mask_file,
             )
         )
 
