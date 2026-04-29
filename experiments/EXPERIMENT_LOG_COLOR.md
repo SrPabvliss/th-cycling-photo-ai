@@ -453,3 +453,66 @@ Latency p95 = 247 ms (over the 200 ms target — defer optimization to F5/F6).
 - Latency optimization (p95 247 → ≤200) needs a separate pass
 
 ---
+
+### Run 10 — Scope pivot: 3 regions → cyclist_with_bike (decision, not yet executed)
+
+**Date:** 2026-04-28
+
+**Trigger:** Pablo, while reviewing labeled crops, observed that the three per-region crops (helmet, cyclist_clothes, bicycle) overlap as **rectangular bboxes** (helmet bbox includes neck/shoulders, cyclist_clothes overlaps with bicycle, etc.). Even with COCO segmentation masking added in Run 8, the per-region semantics are weakly grounded: a "helmet" object's interior has visors/straps that genuinely contain non-focal colors, and labeling intent ("la bici es roja") has been per-rider rather than per-region throughout the data collection.
+
+**Decision:** simplify color analysis from per-region (3 crops × analysis) to **per-rider** (1 analysis on the full cyclist+bike silhouette). The detector class `cyclist_with_bike` already exists in the dataset and has segmentation polygons that yield a clean focal-subject mask covering rider + equipment + bicycle as a single entity.
+
+**Pre-decision review (use-case fit):**
+
+| Source | Statement | Granularity |
+|---|---|---|
+| Thesis objetivos formales (L1024, L1028) | "características de equipamiento" | abstract — no commitment to per-region |
+| Thesis L981, L1013, L1044 | "colores de equipamiento" / "color dominante de equipamiento detectado" | abstract |
+| Thesis L1216 (Titan TV interview) | "se recurre a colores de casco, jersey y bicicleta" | describes the **manual current process**, not the proposed system |
+| Thesis L2186 (Resultados, draft) | "tres colores dominantes por cada región recortada (casco, jersey, bicicleta)" | only line tying to per-region; user-editable draft |
+
+The formal objectives commit only to "equipment colors" abstractly. The granular implementation in L2186 was an interpretation of the manual process, not a thesis-level promise. Pablo will edit L2186 when the thesis chapter is written; the project pivot is independent.
+
+**Rationale (technical + product):**
+1. User query intent at Titan TV: riders describe themselves holistically ("yo tenía rojo y blanco") rather than as casco/jersey/bici tuples. Granular indexing was a developer-side modeling choice, not a user-side requirement.
+2. Single-crop analysis avoids bbox-overlap pollution and per-region semantic weakness (visors/straps inside masked objects).
+3. Latency drops by ~3× — closes the p95 ≤ 200 ms SLA gap at zero algorithmic cost.
+4. Ranking (F5) collapses from 3-level (DisMax over regions) to 1-level (top-K palette match per cyclist) — simpler code, simpler tests, simpler thesis defense.
+5. Future labeling cost: 1 label per rider vs 3 labels per rider.
+
+**Detection model decision: keep 6 classes, filter at inference.**
+
+The detector trained on 6 classes (cyclist, helmet, bicycle, cyclist_clothes, cyclist_with_bike, competidor_number) achieves mAP@0.5 = 0.954. After the pivot only `cyclist_with_bike` and `competidor_number` are consumed downstream. The remaining four classes are NOT removed from the model:
+
+- **Multi-Task Learning (MTL) regularization** (Caruana 1997, Ruder 2017): the auxiliary supervision from cyclist/helmet/cyclist_clothes/bicycle classes enriches the backbone's feature representation. Re-training with only 2 classes risks **underspecified training** — features less discriminative on the target classes — for no measurable speed/size benefit (the classification head is ~4 KB regardless of class count).
+- **Inference cost:** identical. The transformer encoder dominates wall time; the class head is negligible.
+- **Production cleanup:** filter the detector adapter output to `KEPT_CLASSES = {cyclist_with_bike, competidor_number}`. ~3 lines.
+- **Academic defense:** standard practice. COCO trains 80 classes, downstream consumers use whatever subset they need. Wording for the thesis: "the additional class supervision acts as auxiliary signal that enriches feature representations on the target classes (multi-task learning regularization)".
+
+So the detector pipeline does NOT need re-training. Only the color phase pipeline pivots.
+
+**Execution plan (separate from this decision):**
+
+| Step | Effort | Status |
+|---|---|---|
+| Re-extract crops from `cyclist_with_bike` polygons (deterministic, seed=42) | 1 cmd | pending |
+| Re-label ~70 cyclist_with_bike crops (web tool already built) | ~1h Pablo | pending |
+| Update ColorAnalysisConfig — drop region-specific thresholds (none exist; config is region-agnostic) | 0 | done implicitly |
+| Simplify ranking from 3-level DisMax → 1-level top-K match (F5) | ~1h | pending |
+| Update detection adapter: filter to KEPT_CLASSES | ~30 min | pending |
+| Re-run eval pipeline against cyclist_with_bike validation set | 5 min | pending |
+| Update ADR-011/012 to reflect scope (or supersede with ADR-013) | 1h | covered by ADR-013 |
+
+**Salvage from current 191 labels:**
+
+| Region | Reusable for cyclist_with_bike? | Why |
+|---|---|---|
+| helmet (n=63) | partial — top1 likely surfaces in cyclist_with_bike top-3 | helmet is part of the rider |
+| cyclist_clothes (n=62) | high — clothes are central to the rider silhouette | jersey often dominant within cyclist_with_bike |
+| bicycle (n=66) | partial — bike colors appear but compete with rider | bike share of cyclist_with_bike pixels varies |
+
+The labels remain useful as **per-region ground truth** for an internal comparison ("does the per-rider analyzer surface the per-region top-1 as part of its top-3?") but are not the new headline labels. New labels target cyclist_with_bike directly.
+
+**Decision NOT to execute today.** Pablo will sequence the refactor when ready. This entry locks the decision and rationale into the trace; the pivot is a separate work block.
+
+---
