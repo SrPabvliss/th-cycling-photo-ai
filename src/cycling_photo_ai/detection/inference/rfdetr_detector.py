@@ -22,11 +22,21 @@ CLASS_NAMES = [
     "helmet",             # 5
 ]
 
-# Per ADR-013, only these classes feed the downstream pipeline.
-# Auxiliary classes (cyclist, helmet, cyclist_clothes, bicycle) are
-# preserved in the trained model as Multi-Task Learning regularization
-# (Caruana 1997, Ruder 2017) but ignored at inference.
-KEPT_CLASSES = frozenset({"cyclist_with_bike", "competidor_number"})
+# Classes consumed by the downstream pipeline. The detector was trained
+# on six classes (data/v1/coco_6classes/, mAP@0.5 = 0.954); two auxiliary
+# classes — cyclist and cyclist_with_bike — are preserved in the trained
+# weights as Multi-Task Learning regularization (Caruana 1997, Ruder
+# 2017) but filtered out at inference. Color analysis runs on the three
+# per-region classes; OCR runs on competidor_number.
+#
+# Note: ADR-013 originally proposed restricting this to
+# {cyclist_with_bike, competidor_number}. That decision was reverted in
+# Run 12 after Run 11 showed top-1 dropped from 0.466 to 0.204 under
+# per-rider analysis (focal-color dilution). KEPT_CLASSES below reflects
+# the post-revert per-region pipeline.
+KEPT_CLASSES = frozenset({
+    "helmet", "cyclist_clothes", "bicycle", "competidor_number",
+})
 
 
 class RfdetrDetector:

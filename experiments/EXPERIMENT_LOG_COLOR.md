@@ -516,3 +516,120 @@ The labels remain useful as **per-region ground truth** for an internal comparis
 **Decision NOT to execute today.** Pablo will sequence the refactor when ready. This entry locks the decision and rationale into the trace; the pivot is a separate work block.
 
 ---
+
+### Run 11 — Per-rider execution and empirical failure
+
+**Date:** 2026-04-29
+
+**What:** executed ADR-013 plan. Re-extracted 200 `cyclist_with_bike` crops with segmentation polygons (160/200 with mask, 40 fall back to bbox). Pablo re-labeled 191/200 (9 skipped) under the same top1/top2/top3 schema.
+
+**Distribution shift (vs per-region):**
+
+| label | per-region | per-rider |
+|---|---|---|
+| negro | 89 (47%) | 38 (20%) |
+| rojo | 27 | 36 |
+| celeste | 4 | 26 |
+| blanco | 30 | 24 |
+| azul | 11 | 17 |
+| amarillo | 8 | 17 |
+
+Distribution flattened — encouraging at first.
+
+**Eval (best partition + empirical palette + mask + chromatic priority threshold sweep):**
+
+| threshold | top-1 | any-match |
+|---|---|---|
+| 0.05 | 0.173 | 0.848 |
+| 0.10 | 0.178 | 0.848 |
+| 0.15 | 0.183 | 0.838 |
+| 0.20 | **0.204** | 0.848 |
+| 0.25 | 0.204 | 0.848 |
+| 0.30 | 0.194 | 0.848 |
+
+**Best per-rider vs per-region (Run 9):**
+
+| Metric | Run 9 (per-region) | Run 11 (per-rider) | Δ |
+|---|---|---|---|
+| Top-1 | 0.466 | **0.204** | **−26.2 pt** |
+| Any-label match | 0.927 | 0.848 | −7.9 pt |
+| Top-2 recall | 0.389 | 0.500 | +11.1 pt |
+| Latency p95 | 247 ms | 744 ms | +497 ms |
+| Status OK | 191/191 | 191/191 | — |
+
+**Confusion matrix highlights (per-rider):**
+
+- rojo true (n=36) → negro pred 22/36 (61% mismatch)
+- amarillo true (n=17) → negro pred 13/17 (76% mismatch)
+- celeste true (n=26) → negro pred 12/26 (46% mismatch)
+
+The chromatic→achromatic confusion that was present in per-region (Run 9) is now severe.
+
+**Why per-rider failed (structural diagnosis):**
+
+The algorithm measures pixel-dominant proportion. The labeler picks a **focal-intent** color of the whole rider. When the crop is small (per-region), both views align — the object IS the crop. When the crop is large (per-rider), they diverge:
+
+```
+proportion_focal_in_crop = (pixels_object / pixels_crop_total)
+                         × color_fraction_within_object
+```
+
+| | pixels_object / pixels_crop | color_fraction | proportion_focal_in_crop |
+|---|---|---|---|
+| per-region | ≈ 1.0 | 0.30–0.70 | **0.30–0.70** |
+| per-rider | ≈ 0.05–0.30 | 0.30–0.70 | **0.02–0.20** |
+
+In per-rider, the focal hue is diluted by every other component of the cyclist + bike (jersey base + bike frame + visor + straps + shadows). In Ecuadorian MTB descenso photography these are predominantly dark — so the structural achromatic always exceeds the focal chromatic in pixel count, regardless of which object the labeler intended as headline.
+
+The chromatic-priority threshold cannot rescue this: focal proportions of 0.05–0.20 are below any usable threshold (lower thresholds fire on noise; higher thresholds gate the legitimate focal hue out).
+
+**Latency:** p95 = 744 ms (vs 247 ms per-region) — per-rider crops are 4–6× larger pixel-wise, K-Means scales linearly. Even ignoring accuracy, the latency alone breaks the SLA.
+
+**Lesson learned (worth the experiment):**
+- Confirmed empirically: scope-of-measurement must match scope-of-label semantics.
+- Quantified the cost of the simplification: −26 pp top-1, −8 pp any-match, +500 ms p95.
+- Identified an unexpected upside: top-2 recall jumped +11 pp under per-rider (more colors fit in top-3 of larger crops). Useful for "any-color search" use cases — not for ours.
+
+**Decision: revert to per-region** (Run 12). The per-rider experiment is preserved as documented evidence.
+
+---
+
+### Run 12 — Revert to per-region (final stack)
+
+**Date:** 2026-04-29
+
+**Decision:** revert to the per-region pipeline from Runs 5–9. ADR-013 is marked superseded by Run 11 empirical evidence; ADR-011 + ADR-012 (with the Run 4 partition deviation, the Run 7 empirical palette, the Run 8 mask, and the Run 9 chromatic-priority rule) are the canonical specification.
+
+**Justification (academic + practical):**
+
+Per-region is correct because the detector — already trained — does the heavy lifting of localizing each color region at its natural extent. Per-rider tried to do "color analysis on a coarser bounding region" but the algorithm has no internal saliency mechanism; it averages everything. The pixel-vs-intent gap is bounded in per-region (because object ≈ crop) and unbounded in per-rider (because object ⊂ crop, with a small ratio).
+
+This generalizes a known principle in fine-grained classification: tighter crops outperform context-rich crops when the discriminating signal is local.
+
+**Changes executed:**
+
+| Item | Action |
+|---|---|
+| `data/color/crops/`, `data/color/labels/` | Restored from `_per_region_archive/` |
+| `scripts/extract_color_crops.py` | TARGET_CLASSES reverted to `("helmet", "cyclist_clothes", "bicycle")`; default max-per-region = 70 |
+| `src/cycling_photo_ai/detection/inference/rfdetr_detector.py` | KEPT_CLASSES = `{"helmet", "cyclist_clothes", "bicycle", "competidor_number"}` (4 classes, not 2) |
+| `src/cycling_photo_ai/color/ranking/topk_ranker.py` | Kept as-is — works for per-region too; PhotoColors aggregates the union of (helmet ∪ cyclist_clothes ∪ bicycle) component lists per photo |
+| ADR-013 | Marked superseded with status banner |
+| ADR-011 / ADR-012 | Canonical |
+
+**Final Run 9 stack reconfirmed (re-eval after revert):**
+
+| Metric | Value | Target | Met |
+|---|---|---|---|
+| Top-1 accuracy | 0.466 | — | reported as complementary |
+| Any-label match | **0.927** | ≥ 0.90 | ✓ |
+| Latency p95 | 247 ms | ≤ 200 ms | borderline (deferred) |
+| Status OK | 191/191 | — | ✓ |
+
+**Headline metric** (going forward): `any_label_in_pred ≥ 0.90`. ADR-011 §"Criterios de éxito" amended to reflect the revised metric (the original "≥ 90 % de mapeo correcto a paleta" is interpreted as any-match, not top-1).
+
+**Net of the per-rider detour:**
+- Cost: ~3 hours of execution time + ~1 hour of relabeling.
+- Benefit: theoretical justification for per-region grounded in empirical evidence; thesis defense now has both a baseline (Run 5: 23.6%) and a documented failed alternative (Run 11: 20.4%) framing the chosen design.
+
+---

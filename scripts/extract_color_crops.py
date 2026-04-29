@@ -32,11 +32,14 @@ import numpy as np
 
 from cycling_photo_ai.shared.paths import CLEAN_DATASET_DIR, COLOR_CROPS_DIR
 
-# Per ADR-013: scope simplified from per-region (helmet, cyclist_clothes,
-# bicycle) to per-rider analysis on the full cyclist_with_bike silhouette.
-# The segmentation polygon yields a clean focal-subject mask without the
-# rectangular-bbox overlap problems of the per-region approach.
-TARGET_CLASSES = ("cyclist_with_bike",)
+# Per-region scope. ADR-013 attempted a per-rider simplification
+# (cyclist_with_bike), executed in Run 11, and was reverted in Run 12
+# after empirical degradation: top-1 0.466 → 0.204. Reason: the focal
+# color's pixel proportion within the crop drops as the crop grows
+# beyond the focal object, so the algorithm picks the structural
+# achromatic instead of the focal hue. See EXPERIMENT_LOG_COLOR Runs 11
+# and 12 for the full diagnosis.
+TARGET_CLASSES = ("helmet", "cyclist_clothes", "bicycle")
 
 PADDING_RATIO = 0.08
 MIN_CROP_SIDE_PX = 32
@@ -184,8 +187,8 @@ def main() -> None:
         help="COCO splits to process (default: all three)",
     )
     parser.add_argument(
-        "--max-per-region", type=int, default=200,
-        help="Max crops per target class (default: 200; cyclist_with_bike only)",
+        "--max-per-region", type=int, default=70,
+        help="Max crops per region for balanced validation set (default: 70)",
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=Path, default=None)
