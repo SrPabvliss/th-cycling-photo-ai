@@ -341,3 +341,60 @@ For a typical "rojo" bicycle crop: 30% red frame + 50% dark dirt + 20% shadow �
 **Latency:** p95 = 231ms still exceeds the 200ms SLA. Optimization deferred until algorithm decision is final.
 
 ---
+
+### Run 8 — Segmentation mask (option A)
+
+**Date:** 2026-04-28
+
+**Decision:** Pablo chose option A (segmentation masking). COCO `_annotations.coco.json` already includes segmentation polygons for each annotation; rasterizing them into a binary mask is straightforward.
+
+**What:**
+- Re-extracted 203 crops with seed=42 (same crops as before — labels intact). 201/203 produced a valid mask; 2 had empty/RLE polygons.
+- `metadata.csv` adds `mask_file` column. Each crop now has a paired `_mask.png`.
+- `KMeansAnalyzer.analyze(crop_bgr, mask=None)` drops background pixels before the partition stage. Fallback to full crop if mask area < min_total_px.
+- Eval pipeline accepts `--use-mask`; per-crop mask is loaded and passed automatically.
+
+**Results (best partition + empirical palette + mask):**
+
+| Metric | Run 7 (no mask) | Run 8 (masked) | Δ |
+|---|---|---|---|
+| Top-1 | 0.408 | **0.461** | +5.3 pt |
+| Top-2 recall | 0.343 | 0.389 | +4.6 pt |
+| Top-3 recall | 0.314 | 0.305 | -0.9 pt |
+| Any-label match | 0.880 | **0.927** | +4.7 pt |
+| Latency p95 | 231 ms | 243 ms | +12 ms |
+
+**Per-region top-1:**
+- helmet: 0.444
+- cyclist_clothes: **0.532** (best — clothes have distinctive segmented colors)
+- bicycle: 0.409
+
+**Per-class precision (selected):**
+
+| class | Run 7 | Run 8 | comment |
+|---|---|---|---|
+| amarillo | 0.000 | 1.000 | masked-out background was hiding all yellow |
+| naranja | 0.000 | 0.500 | similar |
+| celeste | 0.000 | 0.333 | similar |
+| azul | 0.000 | 0.222 | similar |
+| rojo | 1.000 | 0.500 | precision dropped, recall same |
+| negro | 0.511 | 0.529 | unchanged — masked black objects still present |
+
+**The remaining gap:**
+
+Top-1 still 46% — far below 90% target. Confusion analysis: rojo→negro 19/27, azul→negro 8/11, blanco→negro 14/30. Even WITH segmentation masking, the labeled object's interior contains many genuinely dark/black pixels (helmet straps, visors, clothing trim, frame parts). Pablo labeled the **dominant intent** of the object ("the bike is red") not the **measured pixel-dominant** color.
+
+`any_label_in_pred = 92.7%` confirms the algorithm IS finding the intended color — just often as the 2nd or 3rd component, with a dark component winning top-1.
+
+**Provisional conclusion:** segmentation alone does not close the gap to 90% top-1. The remaining options are:
+1. **Top-K query semantics** — accept any-match (92.7%) as the headline metric. ADR-011 may need amendment.
+2. **Chromatic-priority top-1 rule** — if a chromatic component has proportion ≥ X% (e.g. 25%), it wins top-1 over an achromatic component, regardless of raw proportion. Heuristic, but matches user intent.
+3. **More aggressive masking** — exclude very dark pixels within the mask (helmet straps, etc.) — risks over-trimming.
+
+**Latency:** still p95 ≈ 243ms vs 200ms target. Defer.
+
+**Total improvement so far:** 23.6% → 46.1% top-1, 78.0% → 92.7% any-match.
+
+**Awaiting Pablo's direction** on which of the three remaining levers to pursue.
+
+---
