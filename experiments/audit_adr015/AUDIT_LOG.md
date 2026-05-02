@@ -871,8 +871,61 @@ threshold:                                     0.45-0.70 (deploy choice)
 
 - Validar tercera dimensión clasificación (color — TTV-COLOR)
 - Mini-app comparativa final
-- Pipeline producción ready (`pipeline/orchestrator.py` swap a YOLO11m)
+- ~~Pipeline producción ready (`pipeline/orchestrator.py` swap a YOLO11m)~~ ✅ DONE 2026-05-02
 - Threshold final deploy decision (0.45 balanced vs 0.70 precision-priority)
+
+### [2026-05-02] Pipeline production wiring + adapter fixes
+
+**Problema:** otra sesión detectó inconsistencia código vs realidad post-Phase 4:
+- `yolo_detector.py` CLASS_NAMES = ["cyclist", "helmet", "bicycle", "cyclist_clothes", "competidor_number"] — orden incorrecto, incluye `cyclist` (drop en Phase 4), falta `cyclist_with_bike`. **Bug crítico**: class_id mapping rompía pipeline (helmet → "competidor_number" si pipeline lo usaba).
+- `rfdetr_detector.py` apuntaba a old 6-class baseline `weights/rfdetr_best.pt` (mAP=0.954 contaminado, 30% precision prod).
+- Pipeline `app.py` hardcodeaba RfdetrDetector + TrOCR (no soportaba mini-app swap).
+
+**Fixes aplicados:**
+
+1. **`yolo_detector.py`:**
+   - CLASS_NAMES → orden v3_cleaned canonical: `["bicycle", "competidor_number", "cyclist_clothes", "cyclist_with_bike", "helmet"]`
+   - Añadido `KEPT_CLASSES` filter (consistente con rfdetr adapter)
+   - Default weights path → `weights/yolo11m_v3cleaned/best.pt`
+   - EXIF orientation fix (`ImageOps.exif_transpose`)
+   - `keep_all_classes` flag para debug/eval
+
+2. **`rfdetr_detector.py`:**
+   - `CLASS_NAMES_V3` (5-class default) y `CLASS_NAMES_LEGACY_6` (backward compat)
+   - Constructor flag `legacy_6class=False` (default v3_cleaned)
+   - Default weights → `weights/rfdetr_v3cleaned/best.pth` (legacy → `weights/rfdetr_best.pt`)
+   - EXIF orientation fix
+   - `num_classes` pasado explícito a RFDETRMedium
+
+3. **`pipeline/app.py` factory pattern:**
+   - `_get_detector(detector_type)` — cache by type, supports `yolo` (default), `rfdetr_v3`, `rfdetr_legacy`
+   - `_get_bib_reader(reader_type)` — cache, `parseq` (default), `trocr`
+   - `_get_orchestrator(detector_type, reader_type)` — cached per pair
+   - `/pipeline?detector=yolo&ocr=parseq` — query string overrides for mini-app
+   - `/detect/{model_id}` endpoint generic
+   - Env vars `DETECTOR_TYPE`, `OCR_TYPE` para defaults
+   - `model_versions` response refleja detector/ocr usados
+
+4. **Weights producción wired:**
+   - `weights/yolo11m_v3cleaned/best.pt` (40 MB) ← cp from experiments
+   - `weights/rfdetr_v3cleaned/best.pth` (133 MB) ← cp from experiments
+
+**Smoke tests:**
+
+- IDetector port compliance: YoloDetector ✓, RfdetrDetector ✓
+- E2E pipeline (YOLO + PARSeq factory) sobre DSC01738.JPG (GT=1):
+  ```
+  Detections: 4 (bicycle, helmet, competidor_number conf=0.78, cyclist_clothes)
+  PARSeq reading: digits="1" conf=0.9998
+  Img: 2832×4240 (EXIF correctly applied, vertical preserved)
+  Processing: 1.5s (MPS local)
+  ```
+
+**No invalida resultados previos:**
+- Eval scripts (eval_*.py) usan SDKs directos (`from rfdetr import RFDETRMedium`, `from ultralytics import YOLO`) con class IDs explícitos, NO el adapter. Métricas tesis intactas.
+- Bug `yolo_detector.py` solo afectaba código de producción, no validación.
+
+**Mini-app ready:** detector y OCR swap-able vía query string. Cualquier combinación `{yolo, rfdetr_v3, rfdetr_legacy} × {parseq, trocr}` funciona.
 
 ---
 

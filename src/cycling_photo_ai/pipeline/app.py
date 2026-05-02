@@ -1,22 +1,30 @@
 """FastAPI application — unified pipeline service.
 
 Endpoints:
-- POST /pipeline          — full detect→crop→OCR flow
-- POST /detect/rfdetr     — detection only (backward compat)
+- POST /pipeline                  — full detect→crop→OCR flow
+- POST /detect/{model_id}         — detection only (yolo, rfdetr_v3, rfdetr_legacy)
 - GET  /health
 - GET  /models
+
+Detector / OCR selection per-request via query string (?detector=...&ocr=...)
+or via env defaults:
+  DETECTOR_TYPE  in {yolo (default), rfdetr_v3, rfdetr_legacy}
+  OCR_TYPE       in {parseq (default), trocr}
 """
 
 from __future__ import annotations
 
+import os
 import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 
+from cycling_photo_ai.detection.inference.ports import IDetector
+from cycling_photo_ai.ocr.inference.ports import IBibReader
 from cycling_photo_ai.pipeline.schemas import (
     BibReadingItem,
     DetectionItem,
@@ -26,75 +34,97 @@ from cycling_photo_ai.pipeline.schemas import (
     PipelineResponse,
 )
 
-# Lazy-loaded components
-_detector = None
-_bib_reader = None
-_orchestrator = None
+# Caches: detectors / readers keyed by type → instance (lazy)
+_detectors: dict[str, IDetector] = {}
+_bib_readers: dict[str, IBibReader] = {}
+_orchestrators: dict[tuple[str, str], Any] = {}
+
+DEFAULT_DETECTOR = os.environ.get("DETECTOR_TYPE", "yolo")
+DEFAULT_OCR = os.environ.get("OCR_TYPE", "parseq")
+
+AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy")
+AVAILABLE_OCRS = ("parseq", "trocr")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup/shutdown lifecycle. Models loaded lazily on first request."""
     yield
-    global _detector, _bib_reader, _orchestrator
-    _detector = None
-    _bib_reader = None
-    _orchestrator = None
+    _detectors.clear()
+    _bib_readers.clear()
+    _orchestrators.clear()
 
 
 app = FastAPI(
     title="Cycling Photo AI — Pipeline Service",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
 
-def _get_detector():
-    """Lazy-load detector on first request."""
-    global _detector
-    if _detector is not None:
-        return _detector
+def _get_detector(detector_type: str = DEFAULT_DETECTOR) -> IDetector:
+    """Lazy-load detector by type. Mini-app uses this to swap detectors."""
+    if detector_type in _detectors:
+        return _detectors[detector_type]
 
-    from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
+    if detector_type == "yolo":
+        from cycling_photo_ai.detection.inference.yolo_detector import YoloDetector
+        det = YoloDetector()
+    elif detector_type == "rfdetr_v3":
+        from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
+        det = RfdetrDetector()
+    elif detector_type == "rfdetr_legacy":
+        from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
+        det = RfdetrDetector(legacy_6class=True)
+    else:
+        raise ValueError(
+            f"Unknown detector_type={detector_type!r}. "
+            f"Available: {AVAILABLE_DETECTORS}"
+        )
 
-    _detector = RfdetrDetector()
-    return _detector
+    _detectors[detector_type] = det
+    return det
 
 
-def _get_bib_reader():
-    """Lazy-load TrOCR bib reader on first OCR request."""
-    global _bib_reader
-    if _bib_reader is not None:
-        return _bib_reader
+def _get_bib_reader(reader_type: str = DEFAULT_OCR) -> IBibReader:
+    """Lazy-load bib reader by type."""
+    if reader_type in _bib_readers:
+        return _bib_readers[reader_type]
 
-    from cycling_photo_ai.ocr.inference.trocr_reader import TrOCRBibReader
+    if reader_type == "parseq":
+        from cycling_photo_ai.ocr.inference.parseq_reader import PARSeqReader
+        rd = PARSeqReader()
+    elif reader_type == "trocr":
+        from cycling_photo_ai.ocr.inference.trocr_reader import TrOCRBibReader
+        rd = TrOCRBibReader()
+    else:
+        raise ValueError(
+            f"Unknown reader_type={reader_type!r}. "
+            f"Available: {AVAILABLE_OCRS}"
+        )
 
-    _bib_reader = TrOCRBibReader()
-    return _bib_reader
+    _bib_readers[reader_type] = rd
+    return rd
 
 
-def _get_orchestrator():
-    """Lazy-load full pipeline orchestrator."""
-    global _orchestrator
-    if _orchestrator is not None:
-        return _orchestrator
+def _get_orchestrator(detector_type: str, reader_type: str):
+    """Lazy-load full pipeline orchestrator (cached per detector/reader pair)."""
+    key = (detector_type, reader_type)
+    if key in _orchestrators:
+        return _orchestrators[key]
 
     from cycling_photo_ai.pipeline.orchestrator import PipelineOrchestrator
 
-    detector = _get_detector()
-    bib_reader = _get_bib_reader()
-    _orchestrator = PipelineOrchestrator(
-        detector=detector,
-        bib_reader=bib_reader,
+    orch = PipelineOrchestrator(
+        detector=_get_detector(detector_type),
+        bib_reader=_get_bib_reader(reader_type),
     )
-    return _orchestrator
+    _orchestrators[key] = orch
+    return orch
 
 
 async def _resolve_image(image_url: str) -> str:
-    """If image_url is an HTTP(S) URL, download to temp file and return path.
-
-    If it's a local path, return as-is.
-    """
+    """If image_url is an HTTP(S) URL, download to temp file and return path."""
     if not image_url.startswith(("http://", "https://")):
         return image_url
 
@@ -110,9 +140,13 @@ async def _resolve_image(image_url: str) -> str:
 
 
 @app.post("/pipeline", response_model=PipelineResponse)
-async def pipeline(request: PipelineRequest) -> Any:
-    """Full detection→crop→OCR pipeline."""
-    orch = _get_orchestrator()
+async def pipeline(
+    request: PipelineRequest,
+    detector: str = Query(default=DEFAULT_DETECTOR, description="Detector backend"),
+    ocr: str = Query(default=DEFAULT_OCR, description="OCR reader backend"),
+) -> Any:
+    """Full detection→crop→OCR pipeline. Detector + OCR selectable via query."""
+    orch = _get_orchestrator(detector, ocr)
 
     image_path = await _resolve_image(request.image_url)
     try:
@@ -125,29 +159,25 @@ async def pipeline(request: PipelineRequest) -> Any:
             Path(image_path).unlink(missing_ok=True)
 
     return PipelineResponse(
-        detections=[
-            DetectionItem(**d) for d in result.detections
-        ],
-        bib_readings=[
-            BibReadingItem(**b) for b in result.bib_readings
-        ],
+        detections=[DetectionItem(**d) for d in result.detections],
+        bib_readings=[BibReadingItem(**b) for b in result.bib_readings],
         image_width=result.image_width,
         image_height=result.image_height,
         processing_ms=result.processing_ms,
-        model_versions={"detection": "rfdetr-m", "ocr": "trocr-small-printed"},
+        model_versions={"detection": detector, "ocr": ocr},
     )
 
 
-@app.post("/detect/rfdetr")
-async def detect_rfdetr(request: PipelineRequest) -> Any:
-    """Detection only — backward compatibility."""
-    detector = _get_detector()
+@app.post("/detect/{model_id}")
+async def detect(model_id: str, request: PipelineRequest) -> Any:
+    """Detection only — model_id ∈ AVAILABLE_DETECTORS."""
     import time
 
+    detector_obj = _get_detector(model_id)
     image_path = await _resolve_image(request.image_url)
     try:
         start = time.perf_counter()
-        detections = detector.detect(image_path)
+        detections = detector_obj.detect(image_path)
         elapsed_ms = (time.perf_counter() - start) * 1000
     finally:
         if image_path != request.image_url:
@@ -155,7 +185,7 @@ async def detect_rfdetr(request: PipelineRequest) -> Any:
 
     filtered = [d for d in detections if d.confidence >= request.confidence_threshold]
     return {
-        "model": "rfdetr",
+        "model": model_id,
         "detections": [
             {
                 "class_name": d.class_name,
@@ -176,24 +206,12 @@ async def health() -> HealthResponse:
     process = psutil.Process()
     ram_mb = process.memory_info().rss / 1e6
 
-    loaded: list[str] = []
-    if _detector is not None:
-        loaded.append("rfdetr-detector")
-    if _bib_reader is not None:
-        loaded.append("ocr-reader")
-
+    loaded = list(_detectors.keys()) + [f"ocr:{k}" for k in _bib_readers.keys()]
     return HealthResponse(models_loaded=loaded, ram_usage_mb=round(ram_mb, 1))
 
 
 @app.get("/models", response_model=ModelsResponse)
 async def models() -> ModelsResponse:
-    loaded: list[str] = []
-    if _detector is not None:
-        loaded.append("rfdetr-detector")
-    if _bib_reader is not None:
-        loaded.append("ocr-reader")
-
-    return ModelsResponse(
-        available=["rfdetr-detector", "ocr-reader"],
-        loaded=loaded,
-    )
+    loaded = list(_detectors.keys()) + [f"ocr:{k}" for k in _bib_readers.keys()]
+    available = list(AVAILABLE_DETECTORS) + [f"ocr:{k}" for k in AVAILABLE_OCRS]
+    return ModelsResponse(available=available, loaded=loaded)
