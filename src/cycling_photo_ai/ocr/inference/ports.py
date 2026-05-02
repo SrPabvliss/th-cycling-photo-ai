@@ -22,6 +22,7 @@ class BibReading:
     rejection_reason: str | None = None
     startlist_match: str | None = None
     preprocessing_applied: list[str] | None = None
+    raw_text: str | None = None
 
 
 @runtime_checkable

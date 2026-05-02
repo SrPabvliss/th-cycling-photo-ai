@@ -1,0 +1,90 @@
+{
+  "src": "experiments/audit_adr015/dataset/v3_originalsize",
+  "dst": "experiments/audit_adr015/dataset/v3_cleaned",
+  "transformations": [
+    "drop classes out-of-scope: ['bicycle_text', 'clothes_text', 'helmet_text', 'objects']",
+    "merge cyclist\u2192cyclist_with_bike (IoU>=0.5)",
+    "auto-dedup cyclist_clothes (1 per cyclist_with_bike, keep largest)"
+  ],
+  "final_classes": [
+    "bicycle",
+    "competidor_number",
+    "cyclist_clothes",
+    "cyclist_with_bike",
+    "helmet"
+  ],
+  "total_anns_in": 12010,
+  "total_anns_out": 5700,
+  "global_reduction_pct": 52.54,
+  "per_split": {
+    "train": {
+      "anns_in": 9042,
+      "dropped_class_outscope": 837,
+      "dropped_cyclist_redundant": 916,
+      "relabeled_orphan_cyclist": 1,
+      "dropped_subclass_dedup": {
+        "cyclist_clothes": 2472,
+        "helmet": 504
+      },
+      "kept_orphan_subclass": {
+        "cyclist_clothes": 4,
+        "helmet": 1
+      },
+      "anns_out": 4313,
+      "reduction_pct": 52.3,
+      "final_class_counts": {
+        "cyclist_with_bike": 912,
+        "bicycle": 910,
+        "competidor_number": 669,
+        "cyclist_clothes": 914,
+        "helmet": 908
+      }
+    },
+    "valid": {
+      "anns_in": 1973,
+      "dropped_class_outscope": 194,
+      "dropped_cyclist_redundant": 199,
+      "relabeled_orphan_cyclist": 1,
+      "dropped_subclass_dedup": {
+        "cyclist_clothes": 551,
+        "helmet": 104
+      },
+      "kept_orphan_subclass": {
+        "cyclist_clothes": 5,
+        "helmet": 2
+      },
+      "anns_out": 925,
+      "reduction_pct": 53.12,
+      "final_class_counts": {
+        "cyclist_with_bike": 198,
+        "competidor_number": 126,
+        "bicycle": 198,
+        "cyclist_clothes": 203,
+        "helmet": 200
+      }
+    },
+    "test": {
+      "anns_in": 995,
+      "dropped_class_outscope": 90,
+      "dropped_cyclist_redundant": 103,
+      "relabeled_orphan_cyclist": 0,
+      "dropped_subclass_dedup": {
+        "cyclist_clothes": 282,
+        "helmet": 58
+      },
+      "kept_orphan_subclass": {
+        "cyclist_clothes": 2,
+        "helmet": 1
+      },
+      "anns_out": 462,
+      "reduction_pct": 53.57,
+      "final_class_counts": {
+        "cyclist_with_bike": 100,
+        "bicycle": 100,
+        "cyclist_clothes": 102,
+        "helmet": 100,
+        "competidor_number": 60
+      }
+    }
+  }
+}

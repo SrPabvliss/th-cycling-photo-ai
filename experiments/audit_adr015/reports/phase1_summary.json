@@ -1,0 +1,22 @@
+{
+  "phase1_dups": {
+    "threshold": 0.1,
+    "total_dup_pairs": 35,
+    "cross_split_dup_pairs": 7,
+    "same_split_dup_pairs": 28,
+    "imgs_with_at_least_one_dup": 27
+  },
+  "phase1_leaks": {
+    "threshold": 0.1,
+    "total_leak_imgs": 14,
+    "leaks_by_origin_split": {
+      "valid": 5,
+      "train": 6,
+      "test": 3
+    },
+    "test_leak_pct": 3.03,
+    "valid_leak_pct": 2.53,
+    "test_total": 99,
+    "valid_total": 198
+  }
+}

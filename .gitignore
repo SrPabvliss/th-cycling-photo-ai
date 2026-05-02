@@ -16,11 +16,38 @@ data/
 # Weights (trained models — large binaries)
 weights/
 !weights/.gitkeep
+*.pth
+!weights/.gitkeep
+
+# Debug outputs (transient)
+debug_out/
+
+# Claude Code transient files
+.claude/scheduled_tasks.lock
 
 # Experiment outputs (training logs, checkpoints)
 experiments/*/
 !experiments/.gitkeep
 !experiments/README.md
+
+# ADR-015 audit: track logs + scripts but not dataset/embeddings/predictions
+!experiments/audit_adr015/
+!experiments/audit_adr015/**
+experiments/audit_adr015/dataset/
+experiments/audit_adr015/embeddings/
+experiments/audit_adr015/predictions/
+experiments/audit_adr015/iaa/expert_v1/train/
+experiments/audit_adr015/iaa/expert_v1/valid/
+experiments/audit_adr015/iaa/expert_v1/test/
+experiments/audit_adr015/iaa/imgs/
+experiments/adr016_run1/sample_crops/
+
+# adr016 trained checkpoints (large, regen-able)
+experiments/adr016_run1/adr016_run1_v3cleaned_v2_multiscale/
+experiments/adr016_5seed/adr016_5seed/seed_*/checkpoint_*.ckpt
+experiments/adr016_5seed/adr016_5seed/seed_*/last.ckpt
+experiments/adr016_5seed/adr016_5seed/seed_*/checkpoint_best_*.pth
+experiments/yolo11m_v3cleaned/yolo11m_v3cleaned/weights/
 
 # Jupyter
 .ipynb_checkpoints/

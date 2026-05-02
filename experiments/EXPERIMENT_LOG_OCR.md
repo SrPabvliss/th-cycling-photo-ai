@@ -635,6 +635,463 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 
 ---
 
+### Run 22 — DIAGNÓSTICO FINAL: detector es el bottleneck, no OCR ⚠️
+- **Fecha:** 2026-05-01
+- **Trigger:** revisión visual mini-app B.2 — usuario observa que crops de "needs_review" frecuentemente son árboles, plantas, guantes, llantas (NO bibs). En crops que SÍ son bibs reales, PARSeq lee bien.
+- **Análisis cuantitativo:**
+
+```
+Total bboxes detectados (798 fotos producción): 961
+  Real bibs (consensus ∈ GT visible): 291 (30.3%)
+  Falsos positivos                  : 670 (69.7%)  ← PROBLEMA
+
+det_conf distribución:
+  Real bibs : p25=0.79  p50=0.85  p75=0.87
+  Falsos    : p25=0.23  p50=0.51  p75=0.77
+
+Precision por threshold:
+  det_conf>=0.15 (actual): 30.3%
+  det_conf>=0.30:          38.3%
+  det_conf>=0.50:          43.2%
+  det_conf>=0.70:          51.2%
+  det_conf>=0.85:          74.5%
+```
+
+**Implicaciones críticas:**
+
+1. El "30% EM end-to-end" reportado en Run 19/20 estaba **contaminado por bboxes basura**. OCR predijo ruido sobre crops de no-bibs. NO era fallo del OCR.
+
+2. **OCR realmente funciona bien:**
+   - Test bloqueado curado: 98.7% EM
+   - Producción + filtro conf alta (det_conf≥0.85 + ocr_conf≥0.85): 89.16% EM
+   - Visual review usuario: PARSeq lee correctamente cuando se le pasa un bib real
+
+3. **Bottleneck = RF-DETR detector:**
+   - Threshold default 0.15 demasiado permisivo
+   - 70% falsos positivos en producción nativa (4000×3000 px)
+   - Causa probable: detector entrenado a 640×640 (Roboflow resize), no generaliza a resolución nativa
+   - Otras hipótesis a auditar: anotaciones inconsistentes, class confusion, augmentation insuficiente
+
+**Decisiones tomadas:**
+
+- ❌ **CANCELADO Modal training OCR Phase 5.** OCR no es el problema.
+- ❌ **CANCELADO B.2 crop-level review.** ~70% bboxes son basura, no vale la pena etiquetar.
+- ✅ **Pivot a Camino C: re-train RF-DETR con dataset 1200 imgs nuevas** (próxima sesión).
+- ✅ **Quick win disponible (no aplicado todavía):** subir threshold detector a 0.7 en pipeline → precision 51% sin re-train.
+
+**Estado scripts/datos preparados:**
+- Modal training OCR scripts (`modal_train_parseq_phase5.py`, `modal_train_trocr_phase5.py`) quedan archivados — sirven si futuro re-train se necesita.
+- Combined LMDB (`data/ocr/combined/lmdb_*`) ya subido a Modal — útil si se decide re-train con dataset enriquecido futuro.
+- Acceptance set 798 fotos producción curadas (`labels_curated.csv`) **reusable para evaluar nuevo detector**.
+
+**Hallazgo cuantitativo clave (defensa tesis):**
+
+> RF-DETR-M entrenado a 640×640 (Roboflow standard pipeline) sufre
+> degradación severa de precision (70% falsos positivos) sobre fotos
+> producción nativas (4000×3000 px). Threshold default 0.15 inadecuado;
+> threshold ≥0.7 recupera precision 51%. Re-train con dataset producción
+> es necesario para deployment.
+
+**Outputs:**
+```
+(actualizada) experiments/EXPERIMENT_LOG_OCR.md  Run 22
+(pendiente)   experiments/EXPERIMENT_LOG.md      entrada equivalente detección
+(pendiente)   ADR-007 update sobre threshold producción
+```
+
+---
+
+### Run 21 — Camino B preparación dataset producción 🚧
+- **Fecha:** 2026-05-01
+- **Motivación:** Run 20 confirma OCR es el bottleneck (56% fotos producción tienen detector OK pero ningún OCR acierta). Re-train con producción-real ataca el problema directamente.
+- **Estrategia:** Camino B.1 (rápido, sesgo aceptado) + Camino B.2 (review crop-level manual)
+
+**B.1 — Auto-label crops producción (sin nuevo trabajo humano):**
+
+Dos scripts:
+- `scripts/build_prod_crops_dataset.py` — consensus parseq+trocr ∈ gt_all_bibs → label
+  - Result: 1 high + 18 medium = **19 crops**
+  - Bajísimo: confirma OCR no rescata cuando más se necesita (circular)
+- `scripts/extract_autoconfirm_crops.py` — fotos auto_confirm + bbox primary
+  - Result: **279 crops** (high precision, sesgo "OCR ya acierta")
+
+**Dataset combinado para re-train:**
+
+| Source | Count | Tier | Sesgo |
+|---|---|---|---|
+| `data/ocr/crops/` (curated clean_v10) | 717 | high manual | ninguno |
+| `data/ocr/prod_crops/auto_confirm/` | 279 | high (OCR matched folder) | hacia "fáciles" |
+| `data/ocr/prod_crops/` (consensus) | 19 | medium | mínimo |
+| **Total** | **1015** | | |
+
+**Sesgo crítico:** crops auto_confirm = donde OCR ya funciona. Re-train mejora "easy cases" pero NO ataca los 446 fotos (C) needs_review donde OCR falla. Se documenta como limitación honesta.
+
+**B.2 — Review crop-level (pendiente):**
+- Necesita: tool Streamlit que muestre cada bbox + dropdown `gt_all_bibs` + "no es bib"/"ilegible"
+- Costo: ~960 bboxes × 5-10s = 80-160 min usuario
+- Genera: ~500-800 crops producción-real con hard cases incluidos
+- Bloquea: ganancia significativa sobre cases hard
+
+**Próximos pasos Camino B:**
+1. ✅ Dataset combinado 1015 crops listo
+2. ⏳ Augmentation pipeline straug + albumentations (ADR-014 Fase 2)
+3. ⏳ Modal training scripts para PARSeq-4ph + TrOCR-4ph re-train con producción
+4. ⏳ Tool review crop-level (B.2)
+5. ⏳ Eval re-trained models sobre 798 fotos usable
+
+**Outputs hasta ahora:**
+```
+data/ocr/prod_crops/labels.csv               (19 medium crops)
+data/ocr/prod_crops/auto_confirm/labels.csv  (279 high crops)
+data/ocr/prod_crops/auto_confirm/bib_*.jpg
+data/ocr/combined/labels.csv                 (953 crops manifest)
+data/ocr/combined/{train,valid,test}.csv     (781 / 115 / 57)
+data/ocr/combined/lmdb_train/                (LMDB para Modal)
+data/ocr/combined/lmdb_valid/
+src/cycling_photo_ai/ocr/training/augmentation.py  (RandAugment ADR-014 Fase 2)
+scripts/build_prod_crops_dataset.py
+scripts/extract_autoconfirm_crops.py
+scripts/prep_combined_ocr_dataset.py
+scripts/prep_combined_lmdb.py
+scripts/modal_train_parseq_phase5.py         (Modal A10G, phase4→phase5 fine-tune)
+scripts/modal_train_trocr_phase5.py          (Modal A10G, phase4→phase5 fine-tune)
+scripts/eval_after_retrain.py                (eval phase5 sobre 798 acceptance set)
+scripts/crop_review_app.py                   (Streamlit B.2 review tool)
+experiments/auto_labels/CAMINO_B_PLAN.md     (plan completo B.1/B.2)
+```
+
+**Comandos Modal training (próxima sesión):**
+
+```bash
+# 1. Upload phase4 weights to Modal volume
+modal volume put cycling-photo-ai-vol weights/parseq_4phase/best.pt ocr/parseq_4phase/best.pt
+modal volume put cycling-photo-ai-vol weights/trocr_bib_4phase/best ocr/trocr_4phase/best
+
+# 2. Upload combined LMDB
+modal volume put cycling-photo-ai-vol data/ocr/combined/lmdb_train ocr/combined/lmdb_train
+modal volume put cycling-photo-ai-vol data/ocr/combined/lmdb_valid ocr/combined/lmdb_valid
+
+# 3. Train (paralelo)
+modal run --detach scripts/modal_train_parseq_phase5.py
+modal run --detach scripts/modal_train_trocr_phase5.py
+
+# 4. Download trained weights
+modal volume get cycling-photo-ai-vol ocr/parseq_phase5/best.pt weights/parseq_phase5/best.pt
+modal volume get cycling-photo-ai-vol ocr/trocr_phase5/best weights/trocr_phase5/best
+
+# 5. Eval sobre acceptance set
+.venv/bin/python scripts/eval_after_retrain.py
+```
+
+---
+
+### Run 20 — Camino A: Smart primary heuristic — REFUTADO ❌
+- **Fecha:** 2026-05-01
+- **Motivación:** EM end-to-end producción 30% vs OCR sobre crop bueno 89%. Hipótesis: heurística "área más grande = primary" elige bbox equivocado.
+- **Test:** 6 estrategias scoring + EM at coverage sobre 798 fotos usable.
+
+**Estrategias evaluadas:**
+
+| Estrategia | EM strict |
+|---|---|
+| S0_area_only (baseline) | 35.84% |
+| S1_area × det_conf | 35.59% |
+| S2_area × ocr_conf | 35.96% |
+| S3_area × det_conf × ocr_conf | 35.84% |
+| S4_ocr_conf only | 35.84% |
+| S5_det_conf only | 35.34% |
+
+**Diferencias <1pp = ruido. Ninguna estrategia rescata.**
+
+**EM at coverage (S0 baseline):**
+- conf≥0.85: 86.1% EM @ 41% coverage
+- conf≥0.90: 88.4% EM @ 39% coverage
+
+**Decomposition error sources (798 usable):**
+
+| Source | Count | % |
+|---|---|---|
+| (A) Detector miss completo (n_dets=0) | 54  | 6.8% |
+| (B) Detector OK + algún OCR acierta | 298 | 37.3% |
+| (C) Detector OK + ningún OCR acierta | 446 | 55.9% |
+|   ↳ (C1) det_conf≥0.5 (OCR fail puro) | 321 | 40.2% |
+|   ↳ (C2) det_conf<0.5 (bbox dudoso) | 125 | 15.7% |
+
+**(B) breakdown — qué reader leyó GT:**
+- Both readers: 193
+- Parseq only: 92
+- Trocr only: 13
+
+**Diagnóstico:** problema NO es elegir primary bbox. Problema es que **OCR no lee correctamente en 56% fotos producción** aunque detector encuentre el bib. Heurística primary tope teórico ≈ 37% (recall any reader).
+
+**Decisión:** Camino A descartado. Pivot a Camino B (re-train OCR con producción).
+
+**Outputs:**
+```
+experiments/auto_labels/smart_primary_results.md
+scripts/repipeline_smart_primary.py
+```
+
+---
+
+### Run 19 — Auto-label producción + curador asistido ✅
+- **Fecha:** 2026-05-01
+- **Origen:** Titan TV provee fotos race ya organizadas por carpeta=bib_primary (clasificación humana). Path: `/Users/pablov/thesis/projects/test_photos_1a145`
+- **Dataset:** 159 carpetas (bibs 1-186 sparse), **923 fotos** native phone resolution (4240×2832 / 6000×4000), mean 5.8 fotos/bib. ~60 fotos held-out reservados para mini-app cualitativa (no contaminan acceptance).
+- **Cobertura:** ≥500 producción-representativos requeridos por ADR-014 ✓ (×1.84)
+
+**Pipeline auto-label (`scripts/auto_label_from_folders.py`):**
+
+```
+foto → RF-DETR-M (conf≥0.15) → bboxes ranked by area
+  ↓
+PARSeq + TrOCR ensemble por bbox
+  ↓
+consensus_pred = match si parseq==trocr else max-conf
+  ↓
+status = auto_confirm | auto_confirm_multi | needs_review (conf<0.85 o pred≠folder)
+```
+
+**Resultados 923 fotos en 5.4 min (2.84 fotos/s):**
+
+| Status | Count | % |
+|---|---|---|
+| auto_confirm        | 262 | 28.4% |
+| auto_confirm_multi  | 17  | 1.8% |
+| needs_review        | 644 | 69.8% |
+
+**Hallazgo crítico — distribución producción real desbloqueada:**
+
+| Bbox area p-tile | min(W,H) px aprox |
+|---|---|
+| p25 | 159 |
+| p50 | 209 |
+| p75 | 262 |
+| <64px | **0%** |
+
+**Cierra dos diferidos del ADR-014:**
+- D3 (Real-ESRGAN) — trigger era >10% sub-32px en producción. Producción tiene 0% sub-64px. Rechazado.
+- D1 (SVTRv2 multi-size) — crops grandes, fixed 32×128 stretch funciona. Diferido baja prioridad.
+
+Histograma sub-32px en `data/v2/coco/` era artefacto de Roboflow training-resize a 640×640, no producción.
+
+**Sesgo dataset documentado:**
+- Carpeta = bib *primary* (foreground). Ignora bibs secundarios visibles.
+- Multi-bib detectados en 18.6% fotos (172/923) → review humano genera GT exhaustivo.
+- Selección humana excluye fotos donde primary no fue legible → upper bound optimista.
+- Recall folder-bib en alguna pred OCR = 32.6%. Probable causa: muchas fotos rider de espaldas / ocluido / bib girado, no fallo OCR puro. Review separa.
+
+**Tool de review (`scripts/review_app.py`, Streamlit):**
+Walks `needs_review` queue, muestra foto + bboxes + preds, humano:
+- Confirma/override primary bib
+- Marca todos los bibs visibles (multi-bib GT)
+- Marca usable / discard
+- Notes opcionales
+
+Output incremental: `experiments/auto_labels/labels_curated.csv` con campos `gt_primary`, `gt_all_bibs`, `is_usable`, `notes`, `review_status`.
+
+**Estimado review:** 644 × 30s ≈ 5.4h, distribuible.
+
+**Decisión:** dataset producción-real para acceptance ADR-014 + insumo para multi-bib supervision en re-train futuro. Cierra D1/D3, replantea D5 (padding sweep) como ejecutable post-curación.
+
+**Outputs:**
+```
+experiments/auto_labels/README.md
+experiments/auto_labels/summary.md
+experiments/auto_labels/labels_auto.csv          (923 rows, raw auto)
+experiments/auto_labels/labels_curated.csv       (generado por review_app)
+scripts/auto_label_from_folders.py
+scripts/review_app.py
+```
+
+---
+
+### Run 18 — Preprocessing ablation A/B/C/D + downscale + rotation ✅
+- **Fecha:** 2026-05-01
+- **Motivación:** validar empíricamente qué preprocessing aporta antes de comprometer ADR-014
+- **Set:** 115 crops valid split de `data/ocr/crops/` (NO test bloqueado)
+- **Readers:** PARSeq-4ph (cached) + TrOCR-4ph (locales, sin API)
+- **Detector:** GT bboxes (aísla efecto preprocessing del confound detector noise)
+
+**Experimento 1 — A/B/C/D ablation (N=115):**
+
+| Cond | Descripción | EM PARSeq | EM TrOCR |
+|---|---|---|---|
+| A | CLAHE+denoise (default actual) | 96.52 | 95.65 |
+| B | A + letterbox-pad 1:4 | 52.17 | 28.70 |
+| C | B + LANCZOS x2 si <48px | 52.17 | 28.70 |
+| D | C + deskew MinAreaRect | 52.17 | 28.70 |
+
+Letterbox-pad **destruye perf** (-44pp PARSeq, -67pp TrOCR). Razón: padding gris OOD vs train.
+
+**Experimento 2 — downscale sintético (N=98, target_min ∈ {24,32,48,64}):**
+
+| target | reader | A | C_lanczos2 | C_cubic2 |
+|---|---|---|---|---|
+| 24 | parseq | 86.73 | 86.73 | 86.73 |
+| 24 | trocr  | 83.67 | 83.67 | 84.69 |
+| 32 | parseq | 93.88 | 95.92 | 95.92 |
+| 64 | parseq | 95.92 | 95.92 | 95.92 |
+
+Upscale clásico = neutral (Δ<2pp todos buckets). Modelos robustos hasta 24px sin ayuda.
+
+**Experimento 3 — rotación sintética (N=115, ángulos {0,5,10,15,20,30}):**
+
+| rot_deg | reader | A | D_min | D_pca |
+|---|---|---|---|---|
+| 0 | parseq | 96.52 | 96.52 | 95.65 |
+| 15 | parseq | 91.30 | 91.30 | 91.30 |
+| 15 | trocr  | 88.70 | 88.70 | 80.00 |
+| 30 | trocr  | 52.17 | 52.17 | 47.83 |
+
+D_min idéntico a A (MinAreaRect no detecta rotación → no-op de facto). D_pca peor (-2 a -10pp). Modelos PARSeq/TrOCR robustos hasta 15°. A 30°+ ningún deskew clásico rescata.
+
+**Decisiones consolidadas (alimenta ADR-014):**
+
+| Preprocessing | Veredicto | Acción |
+|---|---|---|
+| CLAHE+denoise condicional (A) | ✅ MANTENER | Default ON, gates ADR-010 |
+| Letterbox-pad 1:4 | ❌ DAÑINO | EXCLUIR pipeline |
+| Upscale clásico (LANCZOS/CUBIC) | ⚪ NEUTRAL | NO incluir |
+| Deskew (MinArea/PCA) | ❌ NO-OP/NEGATIVO | EXCLUIR — modelos ya robustos hasta 15° |
+| Real-ESRGAN aprendido | ❓ DIFERIDO | Cerrado por Run 19 — producción 0% <64px |
+
+**Outputs:**
+```
+experiments/preprocess_ablation/results.csv             (920 rows)
+experiments/preprocess_ablation/results_downscale.csv   (3136 rows)
+experiments/preprocess_ablation/results_rotation.csv    (4140 rows)
+scripts/preprocess_ablation.py
+scripts/preprocess_ablation_downscale.py
+scripts/preprocess_ablation_rotation.py
+```
+
+---
+
+### Run 17 — PARSeq Tier 1 best model integrado al pipeline ✅
+- **Fecha:** 2026-04-30
+- **Modelo:** PARSeq-base 4-phase (Run 14 BEST: 98.7% EM@80% test)
+- **Adapter:** `src/cycling_photo_ai/ocr/inference/parseq_reader.py` (`PARSeqReader`)
+- **Pesos:** `weights/parseq_4phase/best.pt` (95 MB) + `config.json` (ya descargados local)
+- **Loading:** torch.hub cache `baudm/parseq` → `sys.path.insert` → `strhub.models.parseq.model.PARSeq` + `strhub.data.utils.Tokenizer`
+- **Preprocessing:** `Resize((32,128)) + ToTensor + Normalize(0.5,0.5)` (per ADR-009 v2)
+- **Output:** logits → softmax → tokenizer.decode → digits + per-position probabilities. Confidence = min per-digit (weakest link).
+
+**Smoke test sobre `debug_out/crop_0_raw.png`:**
+
+| Pasada | digits | conf | latency | comentario |
+|---|---|---|---|---|
+| First call | `12` | 0.246 | 2149 ms | incluye torch.hub cache load + state_dict load |
+| Cached | `12` | 0.246 | **24 ms** | una vez en memoria — orden magnitud más rápido que VLMs |
+
+Predicción "12" (no "100") es esperada: imagen test es foto completa 2223×1154, no crop tight del detector. PARSeq se entrenó con crops tight 32×128. En flow real (mini-app): foto → detector RF-DETR → crop competidor_number → PARSeq.
+
+**Estado readers:** 10/10 funcionando.
+
+| Tier | Reader | Estado |
+|---|---|---|
+| 1 | TrOCR-1ph | ✅ |
+| 1 | PARSeq-4ph | ✅ ← AHORA INTEGRADO |
+| 2 | Google Vision | ✅ |
+| 2 | AWS Rekognition | ✅ |
+| 3 | gpt-4o-mini | ✅ |
+| 3 | gpt-5 | ✅ |
+| 3 | gemini-2.5-flash | ✅ |
+| 3 | gemini-3-pro-preview | ✅ |
+| 3 | claude-haiku-4.5 | ✅ |
+| 3 | claude-opus-4.7 | ✅ |
+
+**Decisión:** todos los adapters listos. Mini-app Streamlit puede arrancar.
+
+---
+
+### Run 16 — Setup VLMs Tier 3 (6 modelos: 3 vendors × 2 tiers) ✅
+- **Fecha:** 2026-04-30
+- **Decisión vinculante:** ADR-011 services (`/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/vlms/ADR-011_Seleccion_VLMs_Comerciales.md`)
+- **Briefing técnico:** `vlms/vlm_services_briefing_claude_code.md`
+- **Objetivo:** habilitar comparación experimental Tier 3 (VLMs comerciales) — 3 vendors × 2 tiers (frontier + medio)
+
+**6 VLMs configurados:**
+
+| Vendor | Frontier | Tier medio | API key env |
+|---|---|---|---|
+| OpenAI | `gpt-5-2025-08-07` | `gpt-4o-mini-2024-07-18` | `OPENAI_API_KEY` |
+| Anthropic | `claude-opus-4-7` | `claude-haiku-4-5-20251001` | `ANTHROPIC_API_KEY` |
+| Google | `gemini-3-pro-preview` | `gemini-2.5-flash` | `GOOGLE_AI_API_KEY` |
+
+**Adapters Python implementados (`IBibReader` Protocol):**
+- `src/cycling_photo_ai/ocr/inference/openai_vlm_reader.py` (`OpenAIVlmReader(model_id)`)
+- `src/cycling_photo_ai/ocr/inference/claude_vlm_reader.py` (`ClaudeVlmReader(model_id, n_samples)`)
+- `src/cycling_photo_ai/ocr/inference/gemini_vlm_reader.py` (`GeminiVlmReader(model_id)`)
+- `src/cycling_photo_ai/ocr/inference/_vlm_utils.py` — helpers compartidos: `encode_for_vlm` (resize ≤1024px + JPEG q90), `extract_bib_digits`
+
+**Smoke test sobre `debug_out/crop_0_raw.png` (foto completa, bib `100`):**
+
+| Modelo | digits | latency | observación |
+|---|---|---|---|
+| gpt-4o-mini | `100` | 2264 ms | acertó |
+| gpt-5 | `108` | 1461 ms | **alucinación** — hallazgo esperado de VLMs frontier |
+| gemini-2.5-flash | `100` | 2037 ms | acertó (con `thinking_budget=0`) |
+| gemini-3-pro-preview | `100` | 3852 ms | acertó (Gemini 3 NO acepta `thinking_budget=0`, requiere thinking activo + reserva ≥4000 tokens) |
+| claude-haiku-4.5 | `100` | 1299 ms | 3/3 unánime (multi-sample n=3) |
+| claude-opus-4.7 | `100` | 2200 ms | single sample (sin temperature control) |
+
+**Resultado:** 5/6 aciertan, 1 alucinación (GPT-5 → "108"). Confirmación temprana de la H1 del ADR-011: VLMs frontier zero-shot pueden alucinar números plausibles incluso con bibs claros.
+
+**Hallazgos técnicos críticos durante setup:**
+
+1. **Anthropic 5 MB hard limit** sobre imagen base64 → resize obligatorio. Helper `encode_for_vlm` reduce 4.6MB PNG → 200KB JPEG q90 lado ≤1024px. Aplica a todos los VLMs.
+2. **Gemini 2.5+ thinking mode activo por default** consume `max_output_tokens` y deja `parts=None` con `finishReason=MAX_TOKENS`. Solución: `thinking_config=ThinkingConfig(thinking_budget=0)`.
+3. **GPT-5 deprecó `max_tokens`** → usa `max_completion_tokens`. Modelo razona internamente; necesita `reasoning_effort="minimal"` + reserva ≥2000 tokens, si no falla con "max_tokens reached".
+4. **GPT-5 deprecó `temperature`** parámetro user-controlled. Adapter omite `temperature` para snapshots gpt-5*.
+5. **Claude Opus 4.7 deprecó `temperature`** (error explícito 400 "is deprecated for this model"). Sin control de aleatoriedad → multi-sampling no produce diversidad → adapter cae a `n_samples=1` automático.
+6. **logprobs requieren verified org** en OpenAI (403 PermissionDenied) y no soportados en algunos modelos Gemini (400 INVALID_ARGUMENT). Adapter desactiva logprobs por default; confidence cae a 1.0 si digits válidos.
+7. **Gemini free tier agresivo:** ~5 minutos de smoke testing agotó "prepayment credit" del free tier. Para experimento real requiere depositar créditos o esperar reset diario.
+
+**Costo experimento spike:** <$2 USD total (estimado ADR-011 §4.4). Ya gastado en smoke tests: <$0.05.
+
+**Decisión:** 6 adapters implementados. 4 funcionando out-of-the-box (OpenAI ×2, Claude ×2). Gemini bloqueado por quota — usuario debe depositar crédito GCP para destrabarlos. Esperando definir mini-app Streamlit con los 10 contestantes (Tier 1 + 2 + 3).
+
+---
+
+### Run 15 — Setup OCR cloud para spike comparativo (Google Vision + AWS Rekognition) ✅
+- **Fecha:** 2026-04-30
+- **Decisión vinculante:** ADR-010 services (`/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/services/ADR-010_Seleccion_OCR_as_a_Service.md`)
+- **Briefing técnico:** `services/ocr_services_briefing_claude_code.md`
+- **Objetivo:** habilitar comparación experimental Tier 2 (cloud OCR) vs Tier 1 (TrOCR + PARSeq)
+
+**Servicios habilitados:**
+
+| Servicio | Cuenta | Producto | Auth |
+|---|---|---|---|
+| AWS Rekognition | `pablovillacres4@gmail.com` (cuenta tesis aislada de `lideser` trabajo) | `DetectText` (scene text) | profile `tesis` en `~/.aws/credentials`, IAM user `ocr-experiment` con `AmazonRekognitionReadOnlyAccess` |
+| Google Cloud Vision | `pablomartinvillacres@gmail.com` | `TEXT_DETECTION` + `DOCUMENT_TEXT_DETECTION` (multi-feature) | service account JSON `~/keys/google-vision-tesis.json`, project `ttv-cycling-tesis-79520` |
+
+**Adapters Python implementados (`IBibReader` Protocol):**
+- `src/cycling_photo_ai/ocr/inference/google_vision_reader.py` (`GoogleVisionBibReader`)
+- `src/cycling_photo_ai/ocr/inference/aws_rekognition_reader.py` (`AwsRekognitionBibReader`)
+
+**Smoke test sobre `debug_out/crop_0_raw.png` (foto completa, no crop tight):**
+
+| Reader | digits | conf | status | latency | raw_text |
+|---|---|---|---|---|---|
+| Google Vision | `100` | 0.546 | abstained (<0.70) | 1043 ms | `CRE GOAL ONE VISION\n100` |
+| AWS Rekognition | `100` | 0.954 | unmatched ✓ | 2897 ms | `100 G` |
+
+**Hallazgos técnicos durante setup:**
+
+1. **AWS rebrandeo "Users"→"Personas"** en consola español (2026). URL `/iam/home#/users` confirma IAM clásico, no Identity Center.
+2. **GCP role `roles/cloudvision.user` no existe.** Service account funciona sin role explícito en mismo proyecto donde Vision API está habilitada (auth via JSON key).
+3. **Vision API requiere billing habilitado** aunque uso esté dentro del free tier (1000/mes). Sin billing → `PERMISSION_DENIED`.
+4. **`TEXT_DETECTION` retorna `confidence=0.0` por diseño en todos los niveles** (page/block/paragraph/word/symbol). Solo `DOCUMENT_TEXT_DETECTION` popula confidences reales. **Workaround:** llamada multi-feature (ambas en un request). Costo: 2 unidades/imagen, 99 imgs spike = 198 < 1000 free tier.
+5. **AWS Rekognition no provee per-symbol confidence**, solo per-detection (LINE/WORD). En adapter, conf se replica por dígito. Limitación documentada.
+
+**Costo experimento:** $0 USD (free tiers cubren 99 imgs spike).
+
+**Decisión:** adapters Tier 2 listos. Esperando definición Tier 3 (VLMs) antes de construir mini-app comparativa Streamlit.
+
+---
+
 ## Decisiones clave
 
 | Fecha | Decisión | Razón |
@@ -667,6 +1124,19 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 | 2026-04-25 | PARSeq 1-phase < TrOCR 1-phase (83.9% vs 88.4%) | PARSeq pretrained en scene text 94 chars, menos relevante sin pretraining |
 | 2026-04-25 | **PARSeq 4-phase = BEST MODEL: 98.7% EM@80%** | ADR-009 tenía razón. decode_ar=False + 4-phase + digit charset = target alcanzado |
 | 2026-04-25 | 4-phase más impactante para PARSeq (+6.3pp) que TrOCR (+0.9pp) | PARSeq necesita pretraining de dígitos; TrOCR ya tenía text pretrained |
+| 2026-04-30 | Cuenta AWS tesis aislada (`pablovillacres4`) | Profile `lideser` es trabajo, no tocar. Free tier 12m fresco para tesis |
+| 2026-04-30 | Google Vision multi-feature workaround | TEXT_DETECTION conf=0.0 por diseño. DOCUMENT_TEXT_DETECTION sí popula. Ambas en 1 request, 2 unidades/img, free tier 1000/mes absorbe |
+| 2026-04-30 | Spike comparativo cualitativo, sin labels | User valida con fotos propias en mini-app Streamlit. Test set bloqueado quedó solo para Tier 1. Tier 2+3 = on-the-fly visual |
+| 2026-04-30 | Tier 3 expandido a 6 VLMs (3 vendors × 2 tiers) | ADR-011: doble cobertura permite cuantificar premium frontier vs medio. Costo marginal ~$1 sobre 99 imgs |
+| 2026-04-30 | Resize obligatorio para VLMs (≤1024px JPEG q90) | Anthropic 5MB hard limit. Reduce 4.6MB PNG → 200KB. Helper `_vlm_utils.encode_for_vlm` |
+| 2026-04-30 | Adapter Python en lugar de NestJS del briefing | Briefing es para app Titan TV. Repo tesis = Python. Reuso `IBibReader` Protocol, sin port nuevo `IVlmAdapter` |
+| 2026-04-30 | logprobs desactivados en VLMs (verified org needed) | OpenAI 403 PermissionDenied, Gemini 400 INVALID_ARGUMENT en algunos modelos. Confidence cae a 1.0/0.0 |
+| 2026-04-30 | Multi-sample voting solo para Claude Haiku 4.5 | Opus 4.7 deprecó temperature → samples idénticos → forzado a n=1 |
+| 2026-04-30 | GPT-5 requires `max_completion_tokens` + `reasoning_effort="minimal"` | Modelo razona internamente; sin minimal el reasoning consume todos los tokens y output queda vacío |
+| 2026-04-30 | Gemini 2.5+ requiere `thinking_budget=0` | Thinking activo por default deja parts=None con MAX_TOKENS finishReason |
+| 2026-04-30 | Gemini 3 NO acepta `thinking_budget=0` (400) | Frontier requiere thinking activo. Adapter detecta `gemini-3-*` y reserva 4000 tokens en lugar de disable thinking |
+| 2026-04-30 | AI Studio billing en LATAM force prepay | Free tier credit se agota rápido. Cap "Spending limit experimental" toggle separado de pay-as-you-go. Resolución: cargar mínimo $10 prepay |
+| 2026-04-30 | Smoke test 6 VLMs: 5/6 aciertan, GPT-5 alucina | Confirmación temprana H1 ADR-011: frontier puede alucinar números plausibles |
 
 ---
 
@@ -676,3 +1146,9 @@ Registro cronológico de experimentos OCR. Cada entrada documenta: qué probamos
 - ADR-010: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/ADR-010_ocr_pipeline.md`
 - Dataset: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/dataset_preparation_ocr.md`
 - Evaluation: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/evaluation_methodology_ocr.md`
+- ADR-010 services: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/services/ADR-010_Seleccion_OCR_as_a_Service.md`
+- Briefing técnico cloud OCR: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/services/ocr_services_briefing_claude_code.md`
+- ADR-011 VLMs: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/vlms/ADR-011_Seleccion_VLMs_Comerciales.md`
+- Briefing técnico VLMs: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE-OCR/vlms/vlm_services_briefing_claude_code.md`
+- Setup reproducible cloud OCR: `experiments/ocr_cloud_comparison/SETUP.md`
+- Plan spike comparativo: `experiments/ocr_cloud_comparison/COMPARISON_PLAN.md`

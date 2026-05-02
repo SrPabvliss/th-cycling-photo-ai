@@ -1,0 +1,22 @@
+{
+  "imgs_in_sample": 60,
+  "imgs_annotated_by_expert": 58,
+  "imgs_intentionally_skipped": [
+    "DSC_0540",
+    "DSC_0142"
+  ],
+  "imgs_accidentally_missing": [],
+  "total_orig_anns_kept_classes": 630,
+  "total_orig_cyclist_anns": 77,
+  "total_orig_non_cyclist": 553,
+  "total_expert_anns": 344,
+  "total_matches_iou_0.5": 275,
+  "class_agreement_rate_on_matches": 0.9818,
+  "class_disagreement_rate_on_matches": 0.0182,
+  "missing_in_expert_count_excl_cyclist": 286,
+  "missing_in_expert_rate_excl_cyclist": 0.5172,
+  "extra_in_expert_count": 69,
+  "extra_in_expert_rate": 0.2006,
+  "mean_iou_on_matches": 0.7844,
+  "median_iou_on_matches": 0.8288
+}

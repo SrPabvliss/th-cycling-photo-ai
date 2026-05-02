@@ -37,6 +37,7 @@ class BibReadingItem(BaseModel):
     startlist_match: str | None = None
     preprocessing_applied: list[str] = []
     bbox_source: list[float] = Field(default=[], description="Detection bbox that produced this crop")
+    raw_ocr_text: str | None = None
 
 
 class PipelineResponse(BaseModel):

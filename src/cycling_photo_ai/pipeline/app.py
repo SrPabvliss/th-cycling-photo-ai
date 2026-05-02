@@ -3,18 +3,19 @@
 Endpoints:
 - POST /pipeline          — full detect→crop→OCR flow
 - POST /detect/rfdetr     — detection only (backward compat)
-- POST /detect/yolo11m    — detection only (backward compat)
-- POST /ocr/bib           — OCR only (for testing/debugging)
 - GET  /health
 - GET  /models
 """
 
 from __future__ import annotations
 
+import tempfile
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, UploadFile
+import httpx
+from fastapi import FastAPI
 
 from cycling_photo_ai.pipeline.schemas import (
     BibReadingItem,
@@ -43,7 +44,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Cycling Photo AI — Pipeline Service",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -89,14 +90,39 @@ def _get_orchestrator():
     return _orchestrator
 
 
+async def _resolve_image(image_url: str) -> str:
+    """If image_url is an HTTP(S) URL, download to temp file and return path.
+
+    If it's a local path, return as-is.
+    """
+    if not image_url.startswith(("http://", "https://")):
+        return image_url
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(image_url, timeout=60.0, follow_redirects=True)
+        response.raise_for_status()
+
+    suffix = Path(image_url.split("?")[0]).suffix or ".jpg"
+    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+    tmp.write(response.content)
+    tmp.close()
+    return tmp.name
+
+
 @app.post("/pipeline", response_model=PipelineResponse)
 async def pipeline(request: PipelineRequest) -> Any:
     """Full detection→crop→OCR pipeline."""
     orch = _get_orchestrator()
-    result = orch.process(
-        image_path=request.image_url,
-        startlist=request.startlist,
-    )
+
+    image_path = await _resolve_image(request.image_url)
+    try:
+        result = orch.process(
+            image_path=image_path,
+            startlist=request.startlist,
+        )
+    finally:
+        if image_path != request.image_url:
+            Path(image_path).unlink(missing_ok=True)
 
     return PipelineResponse(
         detections=[
@@ -108,6 +134,7 @@ async def pipeline(request: PipelineRequest) -> Any:
         image_width=result.image_width,
         image_height=result.image_height,
         processing_ms=result.processing_ms,
+        model_versions={"detection": "rfdetr-m", "ocr": "trocr-small-printed"},
     )
 
 
@@ -117,9 +144,14 @@ async def detect_rfdetr(request: PipelineRequest) -> Any:
     detector = _get_detector()
     import time
 
-    start = time.perf_counter()
-    detections = detector.detect(request.image_url)
-    elapsed_ms = (time.perf_counter() - start) * 1000
+    image_path = await _resolve_image(request.image_url)
+    try:
+        start = time.perf_counter()
+        detections = detector.detect(image_path)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+    finally:
+        if image_path != request.image_url:
+            Path(image_path).unlink(missing_ok=True)
 
     filtered = [d for d in detections if d.confidence >= request.confidence_threshold]
     return {

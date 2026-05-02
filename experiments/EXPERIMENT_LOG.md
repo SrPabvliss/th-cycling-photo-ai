@@ -278,6 +278,187 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 
 ---
 
+### Run 7 — Setup Tier 3 VLM detection (Gemini 2.5 Pro) ✅
+- **Fecha:** 2026-04-30
+- **Vinculante:** ADR-012 (`/Users/pablov/thesis/adr_claude_docs/AI-PHASE/vlms/ADR-012_Seleccion_VLM_Deteccion_Objetos.md`)
+- **Briefing:** `vlms/CLAUDE_CODE_BRIEFING_Gemini_Detection.md`
+- **Setup reproducible:** `experiments/detection_cloud_comparison/SETUP_GEMINI.md`
+- **Objetivo:** representar estrategia VLM zero-shot en la triada Cloud/Manual/VLM (5 clases custom)
+
+**Modelo:** `gemini-2.5-pro` (snapshot fijo, NO alias). Plan B `gemini-2.5-flash`.
+
+**Por qué solo Gemini (no GPT/Claude como Tier 3 OCR sí incluye):**
+- GPT-5: mAP@50:95 = 1.5 vs Gemini 13.3 (Roboflow100-VL paper)
+- Claude todos: Anthropic desaconseja oficialmente *"spatial reasoning limited"*
+- Gemini 3 Pro Preview: rebrand forzado 9-mar-2026, no GA, default T=1.0
+
+**Spec técnica:**
+- `temperature=0`, `top_p=0`, `thinking_budget=0`
+- `response_mime_type=application/json` + `response_schema=ARRAY[{box_2d, label, confidence}]`
+- 5 clases (sin `cyclist_with_bike` del Tier 1 manual)
+- Coords: `box_2d [ymin, xmin, ymax, xmax]` 0-1000 → repo `(x1,y1,x2,y2)` normalized [0,1]
+
+**Estado:**
+- [x] Adapter `src/cycling_photo_ai/detection/inference/gemini_detector.py` implementado
+- [x] Prompt versionado `experiments/detection_cloud_comparison/prompt_gemini_v1.txt` (SHA-256 prefix `193f42e004a7e654`)
+- [x] Smoke test sobre `debug_out/crop_0_raw.png`: 5 detecciones (las 5 clases válidas), latency 6755 ms
+- [x] Coords convertidas correctamente: box_2d 0-1000 → repo (x1,y1,x2,y2) normalizado [0,1]
+
+**Smoke test detalle:**
+
+| # | Clase | Confidence | bbox normalizado |
+|---|---|---|---|
+| 0 | helmet | 0.500 | (0.220, 0.118, 0.486, 0.334) |
+| 1 | cyclist | 0.500 | (0.130, 0.118, 0.869, 0.888) |
+| 2 | cyclist_clothes | 0.500 | (0.130, 0.180, 0.869, 0.788) |
+| 3 | bicycle | 0.500 | (0.130, 0.400, 0.784, 0.890) |
+| 4 | competidor_number | 0.500 | (0.368, 0.394, 0.584, 0.518) |
+
+**Hallazgos técnicos durante setup (correcciones a ADR-012):**
+
+1. **`gemini-2.5-pro` NO acepta `thinking_budget=0`**, pese a lo que ADR-012 §4.5 declara. Error `400 INVALID_ARGUMENT: "Budget 0 is invalid. This model only works in thinking mode."` Mismo comportamiento que `gemini-3-pro-preview` (ya documentado en Run 16 OCR). Solo `gemini-2.5-flash` acepta `budget=0`.
+2. **Mitigación adapter:** auto-detecta modelo en `__init__`. Flash → 0 (disable). Pro / 3-pro → 128 (minimum useful). Latency Pro con thinking=128: ~6.7s (manejable).
+3. **Confidence todos 0.500:** Gemini Pro retorna structured JSON pero NO calibra confidence per-detection. Default uniforme a 0.5. Advertido en ADR-012 §10 ("No confiar en confidence reportado por Gemini sin calibrar").
+4. **Multi-feature trick OCR no aplica aquí** — detección retorna structured JSON nativamente con `box_2d`, no requiere workaround.
+
+**Decisión:** GeminiDetector listo para integración mini-app. Confidence calibration es limitación reconocida del adapter (no del experimento).
+
+---
+
+### Run 9 — Diagnóstico crítico: RF-DETR-M precision baja en producción ⚠️
+- **Fecha:** 2026-05-01
+- **Origen:** evaluación end-to-end OCR sobre 798 fotos producción (`experiments/auto_labels/labels_curated.csv` Run 19 OCR). Análisis visual + cuantitativo reveló que detector es el bottleneck, no OCR.
+- **Reporte completo:** ver `experiments/EXPERIMENT_LOG_OCR.md` Run 22
+
+**Hallazgos cuantitativos:**
+
+```
+Total bboxes RF-DETR-M sobre 798 fotos prod: 961
+  Real bibs (validados via OCR consensus + GT): 291 (30.3%)
+  Falsos positivos (planta, guante, llanta, etc): 670 (69.7%)
+
+det_conf p50:
+  Real bibs: 0.85
+  Falsos:    0.51
+
+Precision por threshold:
+  >=0.15 (actual): 30.3%
+  >=0.50:          43.2%
+  >=0.70:          51.2%
+  >=0.85:          74.5%
+```
+
+**Contraste vs métricas reportadas previamente:**
+- Run 4 RF-DETR-M baseline: mAP@0.5 = 0.954 (sobre test set v1, Roboflow 640×640)
+- Run 9 producción nativa (4000×3000): precision 30% con threshold 0.15
+
+**Causa raíz probable (a verificar):**
+1. Detector entrenado a 640×640 (Roboflow standard) NO generaliza a resolución nativa móvil
+2. Anotaciones dataset original posiblemente inconsistentes (a auditar)
+3. Class confusion competidor_number con texturas similares (bordes blancos rectangulares en plantas/equipos)
+4. Augmentation training insuficiente para variabilidad producción
+
+**Acciones próxima sesión (Camino C OCR-side, primario detection):**
+1. **Auditoría dataset detection v1/v2** — verificar consistencia anotaciones
+2. **Re-train RF-DETR-M con dataset 1200 imgs nuevas** (usuario confirma disponible)
+3. **Eval nuevo detector sobre 798 fotos producción** (mismo set Run 19 OCR — reusable)
+4. **Threshold sweep en producción** — caracterizar precision-recall curve
+5. **Quick win sin re-train:** subir threshold default a 0.7 en pipeline mini-app
+
+**Métricas a monitorear post-re-train:**
+- Precision sobre 798 prod set (target: ≥80% con threshold 0.5)
+- mAP@0.5 sobre test bloqueado v1 (no caer >2pp del 0.954 baseline)
+- Recall sobre bibs visibles en GT producción (target: ≥85%)
+
+---
+
+### Run 8 — Setup Tier 2 Cloud detection (Roboflow custom training) ✅
+- **Fecha:** 2026-04-30
+- **Vinculante:** ADR-013 (`/Users/pablov/thesis/adr_claude_docs/AI-PHASE/services/ADR-013_Seleccion_Servicio_Cloud_Deteccion.md`)
+- **Briefing:** `services/CLAUDE_CODE_BRIEFING_Roboflow_Detection.md`
+- **Setup reproducible:** `experiments/detection_cloud_comparison/SETUP_ROBOFLOW.md`
+- **Objetivo:** representar estrategia Cloud (custom training) en la triada con arquitectura RF-DETR-M coherente con manual ganador
+
+**Servicio:** Roboflow Serverless. Plan **Public** (USD 0/mes durante tesis). Plan B Vertex AI AutoML, Plan C HF AutoTrain.
+
+**Por qué Roboflow (no AWS/Vertex/Clarifai/Azure):**
+- Dataset ya cargado en plataforma del proyecto
+- Arquitectura RF-DETR-M coherente con manual ganador (ADR-007)
+- Pesos descargables (escape hatch a Roboflow Inference Apache 2.0 self-hosted)
+- Azure Custom Vision deprecado EOL 25-sep-2028
+- AWS Rekognition Custom Labels USD 4/h running (riesgo overrun)
+
+**Spec técnica:**
+- SDK `inference-sdk` oficial (NO `requests`)
+- Endpoint `https://serverless.roboflow.com` (v2)
+- Format response: `(x_center, y_center, w, h)` abs pixels → repo `(x1,y1,x2,y2)` normalized [0,1]
+- Retry exponential backoff (`tenacity`)
+
+**Pre-requisito (usuario):**
+- Entrenar **RF-DETR-Medium** en Roboflow UI sobre version v7 `ai_phase_v1_no_flip`
+- Hyperparameters: **Epochs=30** (no 100 default), Pretrained Objects365
+- Anotar `model_id` formato `{workspace}/{project}/{version}`
+- Configurar `ROBOFLOW_MODEL_ID` en `.env`
+
+**Asimetría experimental declarada (ver ADENDA_ADR-013_asimetria_roboflow.md):**
+- Manual ganador: 6 clases (filtro post-download), 80 epochs early-stop best ~50-60
+- Roboflow Public: 10 clases (Modify Classes paywalled en plan Public), 30 epochs (cap 15 créditos/mes free)
+- Estimación training: 13.30 créditos = ~6h 40min GPU
+- Eval con clases comunes filtered post-prediction → comparación honesta
+
+**Justificación asimetría:** balance rendimiento vs costo es el punto de la triada Cloud/Manual/VLM. Restricciones Roboflow Public son hallazgo legítimo, no atajo.
+
+**Estado:**
+- [x] User configuró 30 epochs + 10 clases en wizard (13.30 créditos < 15 free)
+- [x] Training completado 2026-04-30 23:04
+- [x] Adapter `src/cycling_photo_ai/detection/inference/roboflow_detector.py` con filter a 6 clases comunes
+- [x] Smoke test PASS sobre `debug_out/crop_0_raw.png`: 10 detecciones, latency 19.5s cold start
+- [x] `ROBOFLOW_MODEL_ID=titan-detection-jedpa/7` configurado en `.env`
+
+**Métricas Roboflow reportadas (validation set Roboflow internal):**
+
+| Métrica | Roboflow Cloud (Run 8) | Manual RF-DETR-M (Run 4) | Δ |
+|---|---|---|---|
+| mAP@0.5 | **73.9%** | **95.4%** | **−21.5pp** |
+| Precision | 75.3% | — | — |
+| Recall | 75.9% | — | — |
+| F1 | 75.6% | — | — |
+
+**Hipótesis de la asimetría confirmada cuantitativamente:**
+- Manual ganador: 6 clases × 80 epochs early-stop best ~50-60 ⇒ mAP@0.5 = **95.4%**
+- Roboflow Public: 10 clases × 30 epochs ⇒ mAP@0.5 = **73.9%**
+- **Gap empírico: 21.5 puntos porcentuales**
+
+Magnitud consistente con literatura YOLO Run 1 vs Run 1c (10 clases→6 clases dio +18pp). Restricción cuantificable del plan Public (no permite Modify Classes; free tier limita epochs). Reproducir igualdad de condiciones requeriría $99 USD Core monthly (ver ADENDA §5.1).
+
+**Smoke test detalle (10 detecciones, todas en COMMON_CLASSES):**
+
+| # | Clase | Confidence | Notas |
+|---|---|---|---|
+| 0 | cyclist | 0.977 | bbox grande (correcto) |
+| 1 | cyclist_with_bike | 0.976 | overlap con cyclist |
+| 2 | bicycle | 0.973 | |
+| 3-4 | cyclist_clothes | 0.964 / 0.953 | dos detecciones (jersey + shorts?) |
+| 5-6 | helmet | 0.938 / 0.932 | dos detecciones (duplicado) |
+| 7-8 | cyclist_clothes | 0.895 / 0.878 | extras posibles |
+| 9 | competidor_number | 0.870 | bbox (0.402, 0.398, 0.588, 0.470) |
+
+Comparado con Gemini smoke test (5 detecciones únicas conf=0.5), **Roboflow:**
+- Confidences calibradas (variadas, alta correlación con calidad visual)
+- Tendencia a duplicar boxes (10 detecciones vs 5 únicas)
+- competidor_number bbox similar a Gemini → consistencia entre detectores
+
+**Limitaciones Roboflow Public adicionales (descubiertas tras training):**
+- ❌ Confusion Matrix (paywalled)
+- ❌ Metrics Explorer (paywalled)
+- ❌ Improvement Recommendations (paywalled)
+- ✅ mAP@0.5, Precision, Recall, F1 visibles en valid set + external set
+- ✅ Download Weights (Apache 2.0 escape hatch)
+
+**Decisión:** RoboflowDetector listo. Triada Cloud/Manual/VLM completa (4 detectores). Mini-app Streamlit puede arrancar.
+
+---
+
 ## Decisiones clave
 
 | Fecha | Decisión | Razón |
@@ -294,6 +475,22 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | 2026-04-21 | **RF-DETR-M = modelo producción** | mAP@0.5=0.954 > YOLO 0.904 (+5pp), Apache 2.0, supera targets |
 | 2026-04-21 | Copy-paste no mejora RF-DETR | Run 5 (CP) mAP=0.946 < Run 4 (sin CP) 0.954. Crops artificiales confunden transformer |
 | 2026-04-22 | SAHI no mejora RF-DETR | Tiling destruye contexto espacial del transformer. 512 tiles: +1pp mAP@0.5 pero -2pp mAP@0.5:0.95 |
+| 2026-04-30 | Triada Cloud/Manual/VLM detección — 4 contestantes | ADR-012 + ADR-013 cierran selección. Manual=RF-DETR+YOLO, Cloud=Roboflow, VLM=Gemini 2.5 Pro |
+| 2026-04-30 | Tier 3 detección = solo 1 VLM (Gemini), no 6 como OCR | GPT/Claude rechazados explícitamente por evidencia mAP — solo Gemini garantiza calidad espacial |
+| 2026-04-30 | Roboflow plan Public USD 0 durante tesis | Dataset puede ir a Universe como contribución académica. Migrar a Core anual ($79/mes) si datos privados post-tesis |
+| 2026-04-30 | Roboflow entrena RF-DETR-Medium (no Nano/Small) | Coherencia arquitectural con manual ganador del ADR-007 |
+| 2026-04-30 | GeminiDetector NO va a producción | Solo experimental para tesis. RF-DETR-M sigue como default productivo |
+| 2026-04-30 | Roboflow Public 2026 = 15 créditos/mes (era 30 en 2025) | Documentado en pricing official. 1 cred = 30 min GPU |
+| 2026-04-30 | Roboflow training a 30 epochs (no 80 manual) | 80 epochs = 35 créditos > 15 free; 30 epochs = 13.30 créditos. Trade-off documentado en adenda ADR-013 |
+| 2026-04-30 | Modify Classes paywalled en plan Public | Roboflow training opera con 10 clases (no 6 del manual). Filtro a 6 comunes en eval, no en training. Adenda ADR-013 |
+| 2026-04-30 | Asimetría 6c×80ep vs 10c×30ep es hallazgo, no atajo | Punto del experimento es comparar dentro de presupuesto realista. Si Roboflow pierde, refuerza H_manual_supera_cloud |
+| 2026-04-30 | Igualdad de condiciones Roboflow = $99 USD vs Modal $0 | Core monthly $99 desbloquea Modify Classes + 50 créditos suficientes para 6c×80ep. Modal free tier educativo cubre stack manual con $0. Cuantifica costo real de fairness. |
+| 2026-04-30 | gemini-2.5-pro requiere thinking activo (ADR-012 corrección) | ADR-012 §4.5 declaraba thinking_budget=0 OK. Empíricamente: API rechaza 400. Adapter auto-detecta y usa budget=128 mínimo. Solo flash soporta 0. |
+| 2026-04-30 | Gemini Pro confidence siempre 0.5 | ADR-012 §10 ya advertía no confiar. Hallazgo confirmado smoke test: 5 detecciones todas conf=0.5. Spike cualitativo OK; análisis calibración no aplicable a Gemini. |
+| 2026-04-30 | **Roboflow Cloud mAP@0.5 = 73.9% vs Manual 95.4%** (−21.5pp) | Asimetría predicha cuantificada. Consistente con Run 1 vs 1c YOLO (10c→6c dio +18pp). Hipótesis H_manual_supera_cloud reforzada empíricamente |
+| 2026-04-30 | Roboflow Public Confusion Matrix + Metrics Explorer paywalled | Limitación adicional descubierta tras training. Solo mAP/P/R/F1 visibles en plan Public. Reproducibilidad académica afectada |
+| 2026-04-30 | Roboflow confidence calibrada (0.87-0.98) vs Gemini uniforme (0.5) | Roboflow modelo entrenado nativamente — confidence varía con calidad. Gemini default 0.5 sin calibración. Crucial para análisis ECE |
+| 2026-04-30 | Roboflow tendencia a duplicar detecciones | 10 detecciones smoke test vs Gemini 5 únicas. NMS interno Roboflow más permisivo. Considerar post-processing NMS adicional para integration |
 
 ## Resumen comparativo final
 
@@ -305,3 +502,20 @@ Registro cronológico de experimentos. Cada entrada documenta: qué probamos, po
 | **Run 4** | **RF-DETR-M** | **6** | **baseline** | **0.954** | **0.752** | **⭐ PRODUCCIÓN** |
 | Run 5 | RF-DETR-M | 6 | copy-paste | 0.946 | 0.743 | |
 | Run 6 | RF-DETR-M | 6 | SAHI 512 | 0.966 | 0.735 | mAP@0.5:0.95 peor |
+| Run 7 ✅ | Gemini 2.5 Pro | 5 | zero-shot VLM | TBD (test set) | — | Solo experimental (ADR-012). Smoke test PASS, conf uniforme 0.5 |
+| Run 8 ✅ | Roboflow RF-DETR-M | 10 trained / 6 eval | cloud custom 30ep | **0.739** Roboflow valid set | — | Cloud (ADR-013). −21.5pp vs Manual = asimetría confirmada |
+
+---
+
+## Reference docs
+
+- ADR-007 manual: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/ADR-007_object_detection.md`
+- ADR-008 hosting: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/ADR-008_hosting_inference.md`
+- ADR-012 VLM: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/vlms/ADR-012_Seleccion_VLM_Deteccion_Objetos.md`
+- ADR-013 Cloud: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/services/ADR-013_Seleccion_Servicio_Cloud_Deteccion.md`
+- Briefing Gemini: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/vlms/CLAUDE_CODE_BRIEFING_Gemini_Detection.md`
+- Briefing Roboflow: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/services/CLAUDE_CODE_BRIEFING_Roboflow_Detection.md`
+- Evaluation methodology: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/evaluation_methodology.md`
+- Dataset preparation: `/Users/pablov/thesis/adr_claude_docs/AI-PHASE/dataset_preparation.md`
+- Spike comparativo: `experiments/detection_cloud_comparison/`
+- Eval cuantitativa formal: `experiments/detection_formal_evaluation/formal_evaluation.json`

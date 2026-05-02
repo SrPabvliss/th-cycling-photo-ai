@@ -122,6 +122,7 @@ class PipelineOrchestrator:
                                 status="matched",
                                 startlist_match=reading.digits,
                                 preprocessing_applied=reading.preprocessing_applied,
+                                raw_text=reading.raw_text,
                             )
                         else:
                             reading = BibReading(
@@ -131,6 +132,7 @@ class PipelineOrchestrator:
                                 status="unmatched",
                                 rejection_reason="not_in_startlist",
                                 preprocessing_applied=reading.preprocessing_applied,
+                                raw_text=reading.raw_text,
                             )
 
                     bib_readings.append({
@@ -142,6 +144,7 @@ class PipelineOrchestrator:
                         "startlist_match": reading.startlist_match,
                         "preprocessing_applied": reading.preprocessing_applied or [],
                         "bbox_source": list(det.bbox),
+                        "raw_ocr_text": reading.raw_text,
                     })
             else:
                 errors.append(f"Failed to read image: {image_path}")
