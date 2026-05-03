@@ -98,7 +98,7 @@ def _openai_user_prompt() -> str:
 # Snapshots (kept here so VLM readers can be instantiated with the right id)
 # ---------------------------------------------------------------------------
 
-_GEMINI_3_PRO_ID = "gemini-3-pro-preview"
+_GEMINI_3_PRO_ID = "gemini-3.1-pro-preview"  # original gemini-3-pro-preview retired 2026-03-09
 _GEMINI_2_5_FLASH_ID = "gemini-2.5-flash"
 _GPT_5_ID = "gpt-5-2025-08-07"
 _GPT_4O_MINI_ID = "gpt-4o-mini-2024-07-18"

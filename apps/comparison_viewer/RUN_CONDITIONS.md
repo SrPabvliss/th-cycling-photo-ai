@@ -25,7 +25,7 @@
 | `parseq_base` | Manual OCR | `PARSEQ_CHECKPOINT` | N/A | N/A | N/A | 1 | 32×128 normalize(0.5,0.5) | local | N/A | Determinístico |
 | `trocr_small` | Manual OCR | `TROCR_CHECKPOINT` | N/A | constrained max_len=6 | N/A | 1 | processor default | local | N/A | Constrained logits digit-only |
 | `google_vision` | Cloud OCR | (default Vision API) | N/A | N/A | N/A | 1 | JPEG q=95 | us | enterprise no train | TEXT_DETECTION only (1 unit) |
-| `aws_rekognition` | Cloud OCR | (default Rekognition) | N/A | N/A | N/A | 1 | JPEG q=95 | sa-east-1 | opt-out via Org policy | MinConfidence=50 |
+| `aws_rekognition` | Cloud OCR | (default Rekognition) | N/A | N/A | N/A | 1 | JPEG q=95 | us-east-1 | opt-out via Org policy | MinConfidence=50; DetectText NOT in sa-east-1 |
 | `gemini_3_pro` (ocr) | VLM | `GEMINI_3_PRO_MODEL` | 0.0 | 4000 | on | 1 | JPEG q=90 1024px | us-central1 | paid no train | responseSchema, cached content ON |
 | `gemini_2_5_flash` (ocr) | VLM | `GEMINI_2_5_FLASH_MODEL` | 0.0 | 20 | 0 | 1 | JPEG q=90 1024px | us-central1 | paid no train | responseSchema, cached content ON |
 | `gpt_5` | VLM | `GPT_5_MODEL` | (default) | 2000 | reasoning_effort=minimal | 1 | JPEG q=90 1024px | us | API no train | JSON schema strict, cached input auto |

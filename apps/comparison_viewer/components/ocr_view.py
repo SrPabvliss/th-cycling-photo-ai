@@ -195,9 +195,9 @@ def render(image: dict, settings: Any) -> None:
 
             # Compute consensus and outliers (Task 5.3).
             records_by_system = {
-                sid: rec.normalized_output["text"]
+                sid: rec.normalized_output["predicted_text"]
                 for sid, (_, rec) in results.items()
-                if rec is not None and rec.normalized_output.get("text")
+                if rec is not None and rec.normalized_output.get("predicted_text")
             }
             majority_text, outlier_sids = majority_vote_text(records_by_system)
 

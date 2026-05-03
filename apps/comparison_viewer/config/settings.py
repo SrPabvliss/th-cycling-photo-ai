@@ -61,7 +61,7 @@ def load_settings() -> Settings:
         ),
         "aws_access_key_id": os.environ.get("AWS_ACCESS_KEY_ID", ""),
         "aws_secret_access_key": os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
-        "aws_region": os.environ.get("AWS_REGION", "sa-east-1"),
+        "aws_region": os.environ.get("AWS_REGION", "us-east-1"),  # DetectText NOT in sa-east-1
     }
     return Settings(
         budget_cap_usd_total=float(os.environ.get("BUDGET_CAP_USD_TOTAL", 20)),
