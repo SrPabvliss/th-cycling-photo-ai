@@ -1,7 +1,11 @@
+import pytest
+
 from apps.comparison_viewer.adapters.registry import (
+    CALL_FUNCS,
     SYSTEM_IDS,
-    list_systems_for_domain,
     build_spec,
+    get_call_func,
+    list_systems_for_domain,
 )
 
 
@@ -25,3 +29,20 @@ def test_build_spec_sets_pricing():
     spec = build_spec("yolo11m")
     assert spec.system_id == "yolo11m"
     assert spec.domain == "detection"
+
+
+def test_call_funcs_covers_all_16_systems():
+    assert len(CALL_FUNCS) == 16
+    assert set(CALL_FUNCS.keys()) == set(SYSTEM_IDS)
+    for sid, fn in CALL_FUNCS.items():
+        assert callable(fn), f"{sid} not callable"
+
+
+def test_get_call_func_returns_callable():
+    fn = get_call_func("manual_kmeans")
+    assert callable(fn)
+
+
+def test_get_call_func_raises_on_unknown():
+    with pytest.raises(ValueError, match="Unknown system_id"):
+        get_call_func("nonexistent_system")
