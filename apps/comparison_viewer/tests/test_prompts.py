@@ -34,3 +34,29 @@ def test_build_prompt_unknown_provider_raises():
     import pytest
     with pytest.raises(ValueError):
         build_prompt("unknown")
+
+
+# --- Color prompt tests (Task 0.3) ---
+from apps.comparison_viewer.prompts.color_canonical_v1 import (
+    SEMANTIC_CONTENT as COLOR_CONTENT,
+    SEMANTIC_SHA256 as COLOR_SHA,
+    build_prompt as build_color_prompt,
+    ALLOWED_COLORS,
+)
+
+
+def test_color_allowed_colors_15():
+    assert len(ALLOWED_COLORS) == 15
+    assert "negro" in ALLOWED_COLORS
+    assert "rojo" in ALLOWED_COLORS
+
+
+def test_color_prompt_includes_region():
+    prompt = build_color_prompt("gemini", region="helmet")
+    assert "helmet" in prompt
+    assert COLOR_CONTENT.format(region="helmet") in prompt
+
+
+def test_color_sha_stable():
+    import hashlib
+    assert COLOR_SHA == hashlib.sha256(COLOR_CONTENT.encode("utf-8")).hexdigest()
