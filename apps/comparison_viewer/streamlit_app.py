@@ -19,6 +19,7 @@ from apps.comparison_viewer.components import (
     detection_view,
     navigation,
     ocr_view,
+    summary_view,
 )
 from apps.comparison_viewer.config.settings import (
     DATA_ROOT,
@@ -91,7 +92,7 @@ def main() -> None:
     with tabs[2]:
         color_view.render(image, settings)
     with tabs[3]:
-        st.caption("Resumen — pendiente (Task 8.3).")
+        summary_view.render(manifest)
 
 
 if __name__ == "__main__":
