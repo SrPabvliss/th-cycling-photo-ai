@@ -109,6 +109,15 @@ class GeminiDetector:
         self._client = None
         self._prompt_user: str | None = None
         self._prompt_system: str | None = None
+        # Mini-app introspection (TTV-MINIAPP): populated after each
+        # generate_content call. Default zeros so cost calc is well-defined.
+        self._last_usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cached_input_tokens": 0,
+        }
+        self._last_request_id: str | None = None
 
     def _load(self) -> None:
         from google import genai
@@ -162,7 +171,40 @@ class GeminiDetector:
         except Exception:
             return []
 
+        self._record_usage(response)
         return self._parse_response(response)
+
+    def _record_usage(self, response) -> None:
+        """Populate self._last_usage and self._last_request_id from response.
+
+        Safe getattr-with-zero so partial / mocked responses never blow up.
+        google-genai exposes usage_metadata with snake_case fields:
+        prompt_token_count, candidates_token_count, thoughts_token_count,
+        cached_content_token_count.
+        """
+        usage = getattr(response, "usage_metadata", None)
+        self._last_usage = {
+            "input_tokens": int(getattr(usage, "prompt_token_count", 0) or 0),
+            "output_tokens": int(getattr(usage, "candidates_token_count", 0) or 0),
+            "thinking_tokens": int(getattr(usage, "thoughts_token_count", 0) or 0),
+            "cached_input_tokens": int(
+                getattr(usage, "cached_content_token_count", 0) or 0
+            ),
+        }
+        # google-genai SDK does not currently expose response headers on the
+        # high-level wrapper. We try a couple of plausible paths and fall
+        # back to None when not surfaced (documented gap).
+        request_id: str | None = None
+        try:
+            inner = getattr(response, "_response", None)
+            headers = getattr(inner, "headers", None)
+            if headers is not None:
+                request_id = headers.get("x-request-id")
+        except Exception:
+            request_id = None
+        if request_id is None:
+            request_id = getattr(response, "response_id", None) or None
+        self._last_request_id = request_id
 
     def _parse_response(self, response) -> list[Detection]:
         """Parse Gemini structured JSON response into list[Detection].
