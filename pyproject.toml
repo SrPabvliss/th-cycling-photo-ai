@@ -44,6 +44,7 @@ dependencies = [
     "modal>=1.4.2",
     "timm>=0.9.16",
     "streamlit>=1.57.0",
+    "pyarrow>=24.0.0",
 ]
 
 [project.optional-dependencies]
