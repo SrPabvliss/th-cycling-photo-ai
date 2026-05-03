@@ -14,7 +14,12 @@ from pathlib import Path
 
 import streamlit as st
 
-from apps.comparison_viewer.components import detection_view, navigation, ocr_view
+from apps.comparison_viewer.components import (
+    color_view,
+    detection_view,
+    navigation,
+    ocr_view,
+)
 from apps.comparison_viewer.config.settings import (
     DATA_ROOT,
     EXPERIMENTS_ROOT,
@@ -78,7 +83,7 @@ def main() -> None:
     with tabs[1]:
         ocr_view.render(image, settings)
     with tabs[2]:
-        st.caption("Color tab — pendiente (Task 6.1).")
+        color_view.render(image, settings)
     with tabs[3]:
         st.caption("Resumen — pendiente (Task 8.3).")
 
