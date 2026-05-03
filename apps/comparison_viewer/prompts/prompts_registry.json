@@ -1,0 +1,14 @@
+{
+  "ocr_canonical_v1": {
+    "version": "v1",
+    "domain": "ocr",
+    "semantic_content": "Extract the bib number digits visible in the image. Return only the digits as a string (1-4 characters), or null if illegible or no bib is visible.",
+    "semantic_sha256": "c5d63652e8e6ca3091385f18970f565c72ec04ba202d6b72a52a1a5a548d6222"
+  },
+  "color_canonical_v1": {
+    "version": "v1",
+    "domain": "color",
+    "semantic_content": "Identify the primary and secondary colors of the {region} shown in the image. Return only colors from the allowed palette. Primary = dominant color (>40% of visible surface). Secondary = second-most-prominent color (>15%) or null if monochromatic.",
+    "semantic_sha256": "71f1da55ed4030ca1aa6dc4914cc817a3ce6881cf544f731a763aa704b24300f"
+  }
+}
