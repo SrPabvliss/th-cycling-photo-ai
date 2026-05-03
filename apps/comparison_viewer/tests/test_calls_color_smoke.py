@@ -104,11 +104,12 @@ async def test_call_gemini_2_5_flash_color_smoke(tmp_path):
     fake = MagicMock()
     fake.analyze.return_value = _fake_result()
     fake._last_usage = {
-        "prompt_token_count": 350,
-        "candidates_token_count": 12,
-        "thoughts_token_count": 0,
-        "cached_content_token_count": 0,
+        "input_tokens": 350,
+        "output_tokens": 12,
+        "thinking_tokens": 0,
+        "cached_input_tokens": 40,
     }
+    fake._last_request_id = "req_color_gemini_xyz"
 
     color_mod._gemini_color_singleton = None
     with patch.object(color_mod, "GeminiColorStrategy", return_value=fake) as cls:
@@ -121,11 +122,18 @@ async def test_call_gemini_2_5_flash_color_smoke(tmp_path):
             crop_path=crop,
         )
     cls.assert_called_once()
+    # Caching is enabled via ctor; per-call prompt is set on the strategy
+    # right before analyze() (region-aware injection).
+    ctor_kwargs = cls.call_args.kwargs
+    assert ctor_kwargs["enable_prompt_caching"] is True
+    assert isinstance(fake._prompt_override, str)
+    assert "cyclist_clothes" in fake._prompt_override
     fake.analyze.assert_called_once()
     _assert_color_shape(out, "gemini_2_5_flash_color", "cyclist_clothes")
     assert out["input_tokens"] == 350
     assert out["output_tokens"] == 12
-    assert "request_id" in out
+    assert out["cached_input_tokens"] == 40
+    assert out["request_id"] == "req_color_gemini_xyz"
 
 
 # ---------------------------------------------------------------------------

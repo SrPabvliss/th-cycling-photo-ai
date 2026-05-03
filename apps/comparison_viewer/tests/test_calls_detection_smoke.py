@@ -126,13 +126,14 @@ async def test_call_gemini_2_5_pro_smoke(tmp_path):
     img = _make_image(tmp_path)
     fake_inst = MagicMock()
     fake_inst.detect.return_value = [_fake_det()]
-    # Simulate usage_metadata captured from last response
+    # GeminiDetector now exposes normalized keys (commit dc3079c).
     fake_inst._last_usage = {
-        "prompt_token_count": 1234,
-        "candidates_token_count": 56,
-        "thoughts_token_count": 7,
-        "cached_content_token_count": 0,
+        "input_tokens": 1234,
+        "output_tokens": 56,
+        "thinking_tokens": 7,
+        "cached_input_tokens": 3,
     }
+    fake_inst._last_request_id = "req_gemini_det_xyz"
 
     det_mod._gemini_singleton = None
     with patch.object(det_mod, "GeminiDetector", return_value=fake_inst) as cls:
@@ -147,6 +148,9 @@ async def test_call_gemini_2_5_pro_smoke(tmp_path):
     cls.assert_called_once()
     fake_inst.detect.assert_called_once()
     _assert_shape(out, "gemini_2_5_pro")
-    # Token fields present (may be 0 if not exposed by mock, but keys exist)
-    assert "input_tokens" in out
-    assert "output_tokens" in out
+    # Real values flow through (not zeros).
+    assert out["input_tokens"] == 1234
+    assert out["output_tokens"] == 56
+    assert out["thinking_tokens"] == 7
+    assert out["cached_input_tokens"] == 3
+    assert out["request_id"] == "req_gemini_det_xyz"

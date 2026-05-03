@@ -32,19 +32,16 @@ crop.
 
 Local strategy (ManualColorStrategy) runs CPU only — no GPU on M4 Pro.
 
-Concerns / gaps vs PLAN.md (existing strategies do not yet support these and
-we were told NOT to modify cycling_photo_ai source):
-    - GeminiColorStrategy hardcodes its prompt (loaded from
-      `color/prompts/gemini_color_v1.txt`) — the canonical prompt from
-      `apps/comparison_viewer/prompts/color_canonical_v1.py:build_prompt(...)`
-      is NOT injected. The canonical prompt's semantic_sha256 is still
-      tracked by `prompts/registry.py` and recorded in `CallRecord` via
-      `build_spec`, but the wire-level prompt diverges.
-    - GeminiColorStrategy does not surface response.usage_metadata. We read
-      an optional `_last_usage` attribute that today is never populated by
-      the underlying class (mocks set it in tests). Falls back to zeros so
-      cost calc stays well-defined.
-    - Neither strategy exposes `request_id`.
+Canonical prompt injection (TTV-MINIAPP, commit 657c7a2):
+    - GeminiColorStrategy now accepts `prompt_override` + region is
+      substituted by `color_canonical_v1.build_prompt(provider="gemini",
+      region=...)`. Region varies per call so we set
+      `strategy._prompt_override` right before each analyze() call rather
+      than at ctor time.
+    - `enable_prompt_caching=True` sets `system_instruction` on Gemini for
+      implicit 2.5+ caching.
+    - `_last_usage` (normalized keys) and `_last_request_id` are read after
+      each analyze() call.
 """
 
 from __future__ import annotations
@@ -56,12 +53,14 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageOps
 
+from apps.comparison_viewer.prompts.color_canonical_v1 import (
+    build_prompt as _build_color_prompt,
+)
+from apps.comparison_viewer.storage.schemas import VALID_REGIONS
 from cycling_photo_ai.color.schema import ColorResult
 from cycling_photo_ai.color.strategies.gemini import GeminiColorStrategy
 from cycling_photo_ai.color.strategies.manual import ManualColorStrategy
 from cycling_photo_ai.shared.config import ColorAnalysisConfig
-
-from apps.comparison_viewer.storage.schemas import VALID_REGIONS
 
 
 # ---------------------------------------------------------------------------
@@ -84,12 +83,25 @@ def _get_manual() -> ManualColorStrategy:
 
 
 def _get_gemini_color() -> GeminiColorStrategy:
+    """Return the singleton GeminiColorStrategy.
+
+    The canonical color prompt is region-aware (`build_prompt(provider,
+    region=...)`) so it cannot be baked into the constructor like the OCR
+    Gemini reader. Strategy: keep the singleton (preserves the genai client
+    and any implicit cache state) and mutate `strategy._prompt_override`
+    just before each `analyze` call inside `call_gemini_2_5_flash_color`.
+    The strategy reads `self._prompt_override` per call (commit 657c7a2),
+    so this works without modifying source.
+
+    `enable_prompt_caching=True` here uses the file-loaded fallback prompt
+    as `system_instruction` for Gemini 2.5+ implicit caching. The user
+    payload still carries the canonical region-substituted prompt.
+    """
     global _gemini_color_singleton
     if _gemini_color_singleton is None:
-        # GeminiColorStrategy uses MAX_DIM=512 internally and composites
-        # alpha onto white before sending. Single provider per ADR-019.
         _gemini_color_singleton = GeminiColorStrategy(
             model_id=GeminiColorStrategy.MODEL_DEFAULT,
+            enable_prompt_caching=True,
         )
     return _gemini_color_singleton
 
@@ -169,17 +181,18 @@ def _result_to_raw(result: ColorResult) -> dict:
 
 
 def _gemini_usage(strategy: GeminiColorStrategy) -> dict[str, int]:
-    """Read `_last_usage` (Gemini-style keys) from the strategy if populated.
+    """Read `_last_usage` (normalized keys) from the strategy.
 
-    Existing GeminiColorStrategy does not surface usage; this only returns
-    non-zero values when a test mock or future strategy update populates it.
+    Per commit 657c7a2 GeminiColorStrategy populates `_last_usage` with
+    already-normalized keys: input_tokens, output_tokens, thinking_tokens,
+    cached_input_tokens.
     """
     usage = getattr(strategy, "_last_usage", {}) or {}
     return {
-        "input_tokens": int(usage.get("prompt_token_count", 0) or 0),
-        "output_tokens": int(usage.get("candidates_token_count", 0) or 0),
-        "cached_input_tokens": int(usage.get("cached_content_token_count", 0) or 0),
-        "thinking_tokens": int(usage.get("thoughts_token_count", 0) or 0),
+        "input_tokens": int(usage.get("input_tokens", 0) or 0),
+        "output_tokens": int(usage.get("output_tokens", 0) or 0),
+        "cached_input_tokens": int(usage.get("cached_input_tokens", 0) or 0),
+        "thinking_tokens": int(usage.get("thinking_tokens", 0) or 0),
     }
 
 
@@ -227,6 +240,10 @@ async def call_gemini_2_5_flash_color(
     region_val = _check_region(region)
     rgba = _resolve_crop_rgba(crop_image, crop_path)
     strategy = _get_gemini_color()
+    # Region varies per call but the strategy is a singleton, so set the
+    # canonical region-substituted prompt right before analyze(). The
+    # strategy reads `self._prompt_override` per call (commit 657c7a2).
+    strategy._prompt_override = _build_color_prompt("gemini", region=region_val)
     result: ColorResult = await asyncio.to_thread(strategy.analyze, rgba)
     return {
         "raw_response": _result_to_raw(result),

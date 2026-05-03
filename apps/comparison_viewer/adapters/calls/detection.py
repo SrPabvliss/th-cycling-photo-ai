@@ -232,18 +232,16 @@ async def call_gemini_2_5_pro(
     img = await asyncio.to_thread(_load_oriented, image_path)
     bboxes = _detections_to_bboxes(img, detections)
 
-    # Token usage: GeminiDetector.detect today does NOT surface
-    # response.usage_metadata. PLAN.md asks for prompt/candidates/thoughts
-    # token counts. Until the underlying class exposes them, read from a
-    # `_last_usage` attribute if the detector populates one (also used by
-    # smoke-test mocks). Fall back to zeros so cost calc stays well-defined.
+    # GeminiDetector now (commit dc3079c) populates _last_usage with
+    # already-normalized keys: input_tokens, output_tokens, thinking_tokens,
+    # cached_input_tokens. _last_request_id is captured per call.
     usage = getattr(detector, "_last_usage", {}) or {}
     return {
         "raw_response": {"detections": _detections_raw(detections)},
         "normalized_output": {"system_id": "gemini_2_5_pro", "bboxes": bboxes},
-        "input_tokens": int(usage.get("prompt_token_count", 0) or 0),
-        "output_tokens": int(usage.get("candidates_token_count", 0) or 0),
-        "cached_input_tokens": int(usage.get("cached_content_token_count", 0) or 0),
-        "thinking_tokens": int(usage.get("thoughts_token_count", 0) or 0),
+        "input_tokens": int(usage.get("input_tokens", 0) or 0),
+        "output_tokens": int(usage.get("output_tokens", 0) or 0),
+        "cached_input_tokens": int(usage.get("cached_input_tokens", 0) or 0),
+        "thinking_tokens": int(usage.get("thinking_tokens", 0) or 0),
         "request_id": getattr(detector, "_last_request_id", None),
     }

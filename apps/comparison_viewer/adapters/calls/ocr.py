@@ -32,30 +32,28 @@ Per-call billing (Google Vision, AWS Rekognition): tokens omitted, request_id
 key always present (None today — underlying readers don't surface it).
 
 VLMs (Gemini / OpenAI / Claude): token fields populated from the reader's
-`_last_usage` attribute when present (set by mocks in tests; underlying
-readers do NOT expose usage today — see "Concerns" in commit message). Falls
-back to zeros so cost calc stays well-defined.
+`_last_usage` attribute (commit 0115c1f) which uses normalized keys
+(`input_tokens`, `output_tokens`, `thinking_tokens`, `cached_input_tokens`).
+ClaudeVlmReader sums tokens across N samples internally. Falls back to zeros
+when the SDK does not surface usage_metadata.
 
-Concerns / gaps vs PLAN.md (existing readers do not yet support these and we
-were told NOT to modify cycling_photo_ai source):
-    - No reader exposes API token usage (`response.usage`) — we read an
-      optional `_last_usage` attribute that today is never populated.
-    - VLM readers hardcode their own prompts (`PROMPT`, `SYSTEM_PROMPT`,
-      `USER_PROMPT`) — the canonical prompt from
-      `apps/comparison_viewer/prompts/ocr_canonical_v1.py:build_prompt(...)`
-      is NOT injected. The canonical prompt's semantic_sha256 is still
-      tracked by `prompts/registry.py` and recorded in `CallRecord` via the
-      registry, but the wire-level prompt may differ.
-    - Gemini reader: prompt caching / responseSchema not wired; safety
-      settings already BLOCK_NONE inside the reader.
-    - OpenAI reader: `logprobs` disabled (org verification gate); GPT-4o-mini
-      uses `max_tokens=20`, GPT-5 uses `max_completion_tokens=2000` and
-      `reasoning_effort=minimal` — these are already inside the reader.
-    - Claude reader: multi-sample N=3 voting is built-in; prompt caching
-      `cache_control: ephemeral` is NOT applied. Claude Opus 4.7 falls back
-      to N=1 because the SDK rejects user-controlled temperature for that
-      model.
-    - No reader exposes `request_id`.
+Canonical prompt injection (TTV-MINIAPP):
+    - Anthropic readers: `prompt_override=build_prompt("anthropic")`
+      (XML-wrapped `<task>...</task><output_format>...` string).
+    - Gemini readers: `prompt_override=build_prompt("gemini")` plus
+      `enable_prompt_caching=True` (system_instruction → implicit caching
+      on Gemini 2.5+).
+    - Claude readers: `enable_prompt_caching=True` adds
+      `cache_control=ephemeral` on the system block per Anthropic docs.
+    - OpenAI readers: only the `user` key of `build_prompt("openai")` is
+      forwarded as `prompt_override` because the underlying reader exposes
+      a single override that replaces USER_PROMPT. The reader's
+      SYSTEM_PROMPT remains in place. OpenAI does not currently support
+      prompt caching via this reader.
+
+request_id is read from `reader._last_request_id` for Google Vision (None
+today), AWS Rekognition (populated), and all VLM readers (populated when
+the SDK exposes one).
 """
 
 from __future__ import annotations
@@ -68,6 +66,7 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageOps
 
+from apps.comparison_viewer.prompts.ocr_canonical_v1 import build_prompt as _build_ocr_prompt
 from cycling_photo_ai.ocr.inference.aws_rekognition_reader import (
     AwsRekognitionBibReader,
 )
@@ -78,6 +77,21 @@ from cycling_photo_ai.ocr.inference.openai_vlm_reader import OpenAIVlmReader
 from cycling_photo_ai.ocr.inference.parseq_reader import PARSeqReader
 from cycling_photo_ai.ocr.inference.ports import BibReading
 from cycling_photo_ai.ocr.inference.trocr_reader import TrOCRBibReader
+
+
+def _openai_user_prompt() -> str:
+    """Extract the user-facing text from build_prompt("openai").
+
+    The OpenAI reader only exposes a single `prompt_override` kwarg that
+    replaces USER_PROMPT (the system block stays the reader's hardcoded
+    SYSTEM_PROMPT). The canonical prompt for OpenAI is a {system, user}
+    dict — we forward the `user` key, which carries the semantic content
+    aligned with the canonical prompt sha256 tracked in the registry.
+    """
+    payload = _build_ocr_prompt("openai")
+    if isinstance(payload, dict):
+        return str(payload["user"])
+    return str(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -141,28 +155,42 @@ def _get_aws_rekognition() -> AwsRekognitionBibReader:
 def _get_gemini_3_pro() -> GeminiVlmReader:
     global _gemini_3_pro_singleton
     if _gemini_3_pro_singleton is None:
-        _gemini_3_pro_singleton = GeminiVlmReader(model_id=_GEMINI_3_PRO_ID)
+        _gemini_3_pro_singleton = GeminiVlmReader(
+            model_id=_GEMINI_3_PRO_ID,
+            prompt_override=_build_ocr_prompt("gemini"),
+            enable_prompt_caching=True,
+        )
     return _gemini_3_pro_singleton
 
 
 def _get_gemini_2_5_flash() -> GeminiVlmReader:
     global _gemini_2_5_flash_singleton
     if _gemini_2_5_flash_singleton is None:
-        _gemini_2_5_flash_singleton = GeminiVlmReader(model_id=_GEMINI_2_5_FLASH_ID)
+        _gemini_2_5_flash_singleton = GeminiVlmReader(
+            model_id=_GEMINI_2_5_FLASH_ID,
+            prompt_override=_build_ocr_prompt("gemini"),
+            enable_prompt_caching=True,
+        )
     return _gemini_2_5_flash_singleton
 
 
 def _get_gpt_5() -> OpenAIVlmReader:
     global _gpt_5_singleton
     if _gpt_5_singleton is None:
-        _gpt_5_singleton = OpenAIVlmReader(model_id=_GPT_5_ID)
+        _gpt_5_singleton = OpenAIVlmReader(
+            model_id=_GPT_5_ID,
+            prompt_override=_openai_user_prompt(),
+        )
     return _gpt_5_singleton
 
 
 def _get_gpt_4o_mini() -> OpenAIVlmReader:
     global _gpt_4o_mini_singleton
     if _gpt_4o_mini_singleton is None:
-        _gpt_4o_mini_singleton = OpenAIVlmReader(model_id=_GPT_4O_MINI_ID)
+        _gpt_4o_mini_singleton = OpenAIVlmReader(
+            model_id=_GPT_4O_MINI_ID,
+            prompt_override=_openai_user_prompt(),
+        )
     return _gpt_4o_mini_singleton
 
 
@@ -170,14 +198,24 @@ def _get_claude_opus() -> ClaudeVlmReader:
     global _claude_opus_singleton
     if _claude_opus_singleton is None:
         # ClaudeVlmReader auto-disables temperature / forces N=1 for opus-4-7.
-        _claude_opus_singleton = ClaudeVlmReader(model_id=_CLAUDE_OPUS_ID, n_samples=3)
+        _claude_opus_singleton = ClaudeVlmReader(
+            model_id=_CLAUDE_OPUS_ID,
+            n_samples=3,
+            prompt_override=_build_ocr_prompt("anthropic"),
+            enable_prompt_caching=True,
+        )
     return _claude_opus_singleton
 
 
 def _get_claude_haiku() -> ClaudeVlmReader:
     global _claude_haiku_singleton
     if _claude_haiku_singleton is None:
-        _claude_haiku_singleton = ClaudeVlmReader(model_id=_CLAUDE_HAIKU_ID, n_samples=3)
+        _claude_haiku_singleton = ClaudeVlmReader(
+            model_id=_CLAUDE_HAIKU_ID,
+            n_samples=3,
+            prompt_override=_build_ocr_prompt("anthropic"),
+            enable_prompt_caching=True,
+        )
     return _claude_haiku_singleton
 
 
@@ -230,49 +268,20 @@ def _reading_to_raw(reading: BibReading) -> dict:
 # Token usage helpers
 # ---------------------------------------------------------------------------
 
-def _gemini_usage(reader: GeminiVlmReader) -> dict[str, int]:
-    """Read `_last_usage` (Gemini-style keys) from the reader if populated.
+def _normalized_usage(reader) -> dict[str, int]:
+    """Read `_last_usage` from the reader.
 
-    Existing GeminiVlmReader does not surface usage; this only returns
-    non-zero values when a test mock or future reader update populates it.
-    """
-    usage = getattr(reader, "_last_usage", {}) or {}
-    return {
-        "input_tokens": int(usage.get("prompt_token_count", 0) or 0),
-        "output_tokens": int(usage.get("candidates_token_count", 0) or 0),
-        "cached_input_tokens": int(usage.get("cached_content_token_count", 0) or 0),
-        "thinking_tokens": int(usage.get("thoughts_token_count", 0) or 0),
-    }
-
-
-def _openai_usage(reader: OpenAIVlmReader) -> dict[str, int]:
-    """Read `_last_usage` (OpenAI-style keys) from the reader if populated."""
-    usage = getattr(reader, "_last_usage", {}) or {}
-    return {
-        "input_tokens": int(usage.get("prompt_tokens", 0) or 0),
-        "output_tokens": int(usage.get("completion_tokens", 0) or 0),
-        "cached_input_tokens": int(usage.get("cached_tokens", 0) or 0),
-        "thinking_tokens": int(usage.get("reasoning_tokens", 0) or 0),
-    }
-
-
-def _claude_usage(reader: ClaudeVlmReader) -> dict[str, int]:
-    """Read `_last_usage` (Anthropic-style keys) from the reader if populated.
-
-    PLAN asks for tokens summed across N samples; ClaudeVlmReader runs N
-    samples internally but doesn't aggregate usage today. When it eventually
-    does, this passthrough will work without changes here.
+    Per commit 0115c1f, all VLM readers now expose `_last_usage` with
+    already-normalized keys: input_tokens, output_tokens, thinking_tokens,
+    cached_input_tokens. ClaudeVlmReader additionally sums tokens across
+    its N samples internally and may also expose cache_write_tokens.
     """
     usage = getattr(reader, "_last_usage", {}) or {}
     return {
         "input_tokens": int(usage.get("input_tokens", 0) or 0),
         "output_tokens": int(usage.get("output_tokens", 0) or 0),
-        "cached_input_tokens": int(
-            usage.get("cache_read_input_tokens", 0)
-            or usage.get("cache_creation_input_tokens", 0)
-            or 0
-        ),
-        "thinking_tokens": 0,
+        "cached_input_tokens": int(usage.get("cached_input_tokens", 0) or 0),
+        "thinking_tokens": int(usage.get("thinking_tokens", 0) or 0),
     }
 
 
@@ -426,7 +435,7 @@ async def call_gemini_3_pro(
         parent_crop_sha256=parent_crop_sha256,
         crop_image=crop_image,
         crop_path=crop_path,
-        usage=_gemini_usage(reader),
+        usage=_normalized_usage(reader),
     )
 
 
@@ -448,7 +457,7 @@ async def call_gemini_2_5_flash(
         parent_crop_sha256=parent_crop_sha256,
         crop_image=crop_image,
         crop_path=crop_path,
-        usage=_gemini_usage(reader),
+        usage=_normalized_usage(reader),
     )
 
 
@@ -470,7 +479,7 @@ async def call_gpt_5(
         parent_crop_sha256=parent_crop_sha256,
         crop_image=crop_image,
         crop_path=crop_path,
-        usage=_openai_usage(reader),
+        usage=_normalized_usage(reader),
     )
 
 
@@ -492,7 +501,7 @@ async def call_gpt_4o_mini(
         parent_crop_sha256=parent_crop_sha256,
         crop_image=crop_image,
         crop_path=crop_path,
-        usage=_openai_usage(reader),
+        usage=_normalized_usage(reader),
     )
 
 
@@ -514,7 +523,7 @@ async def call_claude_opus_4_7(
         parent_crop_sha256=parent_crop_sha256,
         crop_image=crop_image,
         crop_path=crop_path,
-        usage=_claude_usage(reader),
+        usage=_normalized_usage(reader),
     )
 
 
@@ -536,5 +545,5 @@ async def call_claude_haiku_4_5(
         parent_crop_sha256=parent_crop_sha256,
         crop_image=crop_image,
         crop_path=crop_path,
-        usage=_claude_usage(reader),
+        usage=_normalized_usage(reader),
     )
