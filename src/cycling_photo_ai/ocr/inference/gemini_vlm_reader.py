@@ -32,18 +32,39 @@ PROMPT = (
     "What number is shown on this cycling bib? "
     "Reply with ONLY the digits, no other text."
 )
+SYSTEM_INSTRUCTION = (
+    "You are an OCR system specialized in reading cycling bib numbers. "
+    "Output digits only, no words."
+)
 
 
 class GeminiVlmReader:
     """Google Gemini vision OCR for cycling bibs."""
 
-    def __init__(self, model_id: str = "gemini-2.5-flash") -> None:
+    def __init__(
+        self,
+        model_id: str = "gemini-2.5-flash",
+        prompt_override: str | None = None,
+        enable_prompt_caching: bool = False,
+    ) -> None:
         self._model_id = model_id
         self._client = None
         # Gemini 3+ Pro requires thinking; thinking_budget=0 returns 400.
         # Gemini 2.5 supports thinking_budget=0 (disable thinking for OCR).
         self._supports_thinking_disable = not model_id.startswith("gemini-3")
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
+        # Mini-app integration (TTV-MINIAPP). prompt_override=None preserves
+        # backward-compatible behavior. enable_prompt_caching=False keeps
+        # existing wire payload identical.
+        self._prompt_override = prompt_override
+        self._enable_prompt_caching = enable_prompt_caching
+        self._last_usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cached_input_tokens": 0,
+        }
+        self._last_request_id: str | None = None
 
     def _load(self) -> None:
         from google import genai
@@ -79,17 +100,29 @@ class GeminiVlmReader:
         if self._supports_thinking_disable:
             cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
 
+        # Prompt caching (system_instruction caching). google-genai supports
+        # implicit caching when system_instruction is set. The explicit cached
+        # content API requires a prior `caches.create` call which we skip
+        # for low-volume OCR; setting system_instruction is sufficient hint
+        # for implicit caching on Gemini 2.5+.
+        if self._enable_prompt_caching:
+            cfg_kwargs["system_instruction"] = SYSTEM_INSTRUCTION
+
+        user_prompt = self._prompt_override if self._prompt_override else PROMPT
+
         try:
             response = self._client.models.generate_content(
                 model=self._model_id,
                 contents=[
                     types.Part.from_bytes(data=jpeg_bytes, mime_type="image/jpeg"),
-                    PROMPT,
+                    user_prompt,
                 ],
                 config=types.GenerateContentConfig(**cfg_kwargs),
             )
         except Exception as e:
             return _abstained(f"api_error:{type(e).__name__}:{str(e)[:80]}")
+
+        self._record_usage(response)
 
         raw = (response.text or "").strip() if response.text else ""
         digits, reason = extract_bib_digits(raw)
@@ -102,6 +135,29 @@ class GeminiVlmReader:
 
     def is_loaded(self) -> bool:
         return self._client is not None
+
+    def _record_usage(self, response) -> None:
+        """Populate self._last_usage and self._last_request_id from response."""
+        usage = getattr(response, "usage_metadata", None)
+        self._last_usage = {
+            "input_tokens": int(getattr(usage, "prompt_token_count", 0) or 0),
+            "output_tokens": int(getattr(usage, "candidates_token_count", 0) or 0),
+            "thinking_tokens": int(getattr(usage, "thoughts_token_count", 0) or 0),
+            "cached_input_tokens": int(
+                getattr(usage, "cached_content_token_count", 0) or 0
+            ),
+        }
+        request_id: str | None = None
+        try:
+            inner = getattr(response, "_response", None)
+            headers = getattr(inner, "headers", None)
+            if headers is not None:
+                request_id = headers.get("x-request-id")
+        except Exception:
+            request_id = None
+        if request_id is None:
+            request_id = getattr(response, "response_id", None) or None
+        self._last_request_id = request_id
 
 
 def _abstained(reason: str) -> BibReading:
