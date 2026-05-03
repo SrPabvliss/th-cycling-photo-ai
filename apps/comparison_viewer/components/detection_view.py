@@ -19,12 +19,15 @@ If ``run_stage`` (or the worker thread) raises, the worker still pushes the
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageDraw
 import streamlit as st
 
 from apps.comparison_viewer.adapters.registry import list_systems_for_domain
 from apps.comparison_viewer.components.live_progress import (
+    SYSTEM_COLORS,
     format_status_line,
     run_async_in_thread,
 )
@@ -35,6 +38,47 @@ from apps.comparison_viewer.config.settings import (
 from apps.comparison_viewer.pipeline_runner import run_stage
 
 
+def render_overlay(
+    image_path: Path, results: dict[str, tuple[str, Any]], toggles: dict[str, bool]
+) -> Image.Image:
+    """Render bounding boxes on the image with per-system colors and toggles.
+
+    Args:
+        image_path: Path to the source image file.
+        results: dict mapping system_id to (kind, CallRecord|None). Only records
+                 with kind="done" and rec is not None are rendered.
+        toggles: dict mapping system_id to bool. If toggles[sid] is False, that
+                 system's boxes are not drawn.
+
+    Returns:
+        A PIL Image with overlaid bounding boxes.
+    """
+    img = Image.open(image_path).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    for sid, (kind, rec) in results.items():
+        # Skip if no record, not done, or toggled off
+        if rec is None or not toggles.get(sid, True):
+            continue
+
+        bboxes = rec.normalized_output.get("bboxes", [])
+        color = SYSTEM_COLORS.get(sid, "#cccccc")  # fallback gray
+
+        for bb in bboxes:
+            x, y, w, h = bb["x"], bb["y"], bb["w"], bb["h"]
+            # Draw rectangle
+            draw.rectangle(
+                [x, y, x + w, y + h],
+                outline=color,
+                width=4,
+            )
+            # Draw text label with confidence
+            label = f"{sid} {bb.get('confidence', 0.0):.2f}"
+            draw.text((x, y - 14), label, fill=color)
+
+    return img
+
+
 def render(image: dict, settings: Any) -> None:
     st.subheader(f"Imagen: {image['filename']}")
 
@@ -43,8 +87,6 @@ def render(image: dict, settings: Any) -> None:
         st.image(str(image_path), width=600)
     else:
         st.warning(f"Imagen no encontrada en disco: {image_path}")
-
-    # TODO(Task 4.3): bbox overlay rendering goes here once detections complete.
 
     if st.button("Ejecutar Detection", key="run_det"):
         systems = list_systems_for_domain("detection")
@@ -73,3 +115,19 @@ def render(image: dict, settings: Any) -> None:
                         st.write(format_status_line(s, k, r))
         finally:
             thread.join(timeout=5.0)
+
+        # All systems completed. Create toggles and render overlay.
+        if results:
+            st.markdown("---")
+            st.subheader("Detecciones")
+
+            # Create inline checkboxes (4 systems per row)
+            cols = st.columns(4)
+            toggles = {}
+            for idx, sid in enumerate(sorted(results.keys())):
+                col = cols[idx % 4]
+                toggles[sid] = col.checkbox(sid, value=True, key=f"det_toggle_{sid}")
+
+            # Render and display overlay
+            overlay = render_overlay(image_path, results, toggles)
+            st.image(overlay, width=600, caption="Detections with bounding boxes")
