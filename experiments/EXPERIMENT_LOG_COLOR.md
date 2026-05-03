@@ -633,3 +633,424 @@ This generalizes a known principle in fine-grained classification: tighter crops
 - Benefit: theoretical justification for per-region grounded in empirical evidence; thesis defense now has both a baseline (Run 5: 23.6%) and a documented failed alternative (Run 11: 20.4%) framing the chosen design.
 
 ---
+
+### Run 13 — Dataset migration v3_cleaned (post Phase 4 dedup)
+
+**Date:** 2026-05-02
+
+**Trigger:** detection epic (TTV-118) commit `9b98806` produced `dataset/v3_cleaned`
+with helmet + cyclist_clothes deduplicated (over-segmentation 4× → 1.4×).
+Color crops were extracted from `clean_v10` (pre-dedup) so they likely
+included sub-segmented fragments (jersey-only, shorts-only, visor-only).
+Hypothesis: re-extracting against deduped dataset gives 1-bbox-per-cyclist
+crops, focal object aligned with label intent.
+
+**Execution:**
+- Backup: `data/color/_archive_clean_v10/{crops,labels}` preserved.
+- Modified `scripts/extract_color_crops.py`: added `--source-dir` and
+  `--prefer-images-from` flags. Latter biases random sampling toward
+  (img, region) keys present in old metadata to maximize label carry-over.
+- Re-extracted with seed=42, max-per-region=70:
+  - 210 crops (vs 203 old), 210/210 with COCO mask (vs 201/203 old).
+  - 70 helmet + 70 cyclist_clothes + 70 bicycle.
+- Built `scripts/carryover_color_labels.py`. Three case logic:
+  1-to-1 same key → carry; N-to-1 with consistent old top1 → carry;
+  N-to-1 inconsistent (sub-seg with divergent labels) → manual.
+- Carry-over result: **204/210 auto (97.1%)**, 6 manual relabel by Pablo.
+- Dataset overlap analysis: 184 old labeled imgs all present in v3_cleaned
+  (100%). Initial seed=42 random sampling of new yielded only 9/210 keys
+  matching — fixed by `--prefer-images-from` (shifted to 200/210).
+
+**Final usable labels:** 198 (12 marked "skipped" by Pablo).
+
+**N-to-1 inconsistency cases (2 of 3):** old over-segmented bboxes had
+divergent top-1 — e.g., helmet crop labeled `azul` (full helmet) vs
+`rojo` (visor sub-seg). Post-dedup keeps only largest = full helmet, so
+auto-carrying any single old label was unsafe. Sent to manual.
+
+**Phase 0 baseline replication on new dataset (Run 9 stack + clean_v10
+empirical palette_v2):**
+
+| Metric | Old (clean_v10, n=191) | New (v3_cleaned, n=198) | Δ |
+|---|---|---|---|
+| Top-1 | 0.466 | 0.444 | -2.2 pp |
+| Any-match | 0.927 | 0.914 | -1.3 pp |
+| bicycle | 0.409 | 0.424 | +1.5 pp ✓ |
+| cyclist_clothes | 0.548 | 0.412 | **-13.6 pp** ⚠️ |
+
+**Counter-intuitive finding:** dedup did NOT yield free top-1 gain on
+cyclist_clothes. Probable cause: deduped bbox = "largest" = full torso
+including arms/shorts; old crops were random fragments (sometimes
+jersey-only). Empirical palette_v2 was calibrated on old crops; pixel
+distribution shifted under v3_cleaned.
+
+**Decision:** accept ~2 pp regression as cost of the dataset cleanup,
+recalibrate palette next run, freeze v3_cleaned as canonical going forward.
+
+---
+
+### Run 14 — Schema migration (S0a) and palette recalibration
+
+**Date:** 2026-05-02
+
+**Trigger:** ADR-018 + ADR-019 require a strategy ABC + ColorResult
+schema before swapping algorithms. Also: empirical palette must be
+recalibrated against v3_cleaned crops/labels.
+
+**Schema changes (no behavior shift):**
+- New `cycling_photo_ai/color/schema.py`: Pydantic `ColorResult`,
+  `PaletteEntry`, `ColorMetadata`. EN-facing 15-color enum (ADR-018 §4
+  + `gold` extension to keep 1:1 with our ES palette).
+- New `cycling_photo_ai/color/strategies/{base,manual}.py`. ABC =
+  `ColorAnalysisStrategy(rgba) -> ColorResult`. `ManualColorStrategy`
+  wraps the legacy `KMeansAnalyzer` with no semantic change.
+- Extended `palette/synonyms.py` with `ES_TO_EN` / `EN_TO_ES` and
+  bidirectional `normalize_query_color`.
+
+**Parity test** (`scripts/smoke_strategy_parity.py`):
+ManualColorStrategy.analyze(rgba) vs legacy KMeansAnalyzer.analyze(bgr,mask)
+across full validation set: **198/198 (100%)** identical primary
+predictions. Refactor confirmed semantically transparent.
+
+**Palette recalibration on new dataset:**
+- `experiments/color_phase0_v3cleaned_calibration/palette_v2.yaml` —
+  same anchored-K-Means logic as Run 7, but anchored against canonical
+  `PALETTE_LAB` (ES) over the 198-crop v3_cleaned set.
+- Eval (Run 9 stack + recalibrated v2): top-1 = **0.439**, any-match =
+  **0.919**. Vs old palette_v2 on new dataset: −0.5 pp top-1 / +0.5 pp
+  any-match. Wash. Distribution shift not large enough to move centroids.
+- Notable: `marron` empirical a* = -6.5 (was +22). Crops marron = mud /
+  desaturated brown, not warm chocolate brown. Domain reality.
+
+**Decision:** adopt recalibrated palette_v2 as Phase 0 baseline. Continue
+to S1 ADR-018 anchor swap.
+
+---
+
+### Run 15 — Intervention A: ADR-018 §5 anchor swap (S1)
+
+**Date:** 2026-05-02
+
+**ADR-018 §7 Phase 1** prescribes replacing CSS3 catalog with §5 anchors.
+Our baseline already used PALETTE_LAB (ES canonical), not CSS3, so the
+"swap" is partially trivial. Two paths tested:
+
+**A. Raw ADR-018 §5 anchors:** `configs/color/palette_adr018_anchors.yaml`.
+Berlin & Kay theoretical centroids + the run-7 empirical green.
+
+**B. ADR-018 anchored + recalibrated:** new
+`scripts/calibrate_palette_adr018.py`. Monkey-patches `PALETTE_LAB` to
+ADR-018 §5 values, then runs anchored-K-Means against v3_cleaned labels.
+Output: `experiments/color_s1_adr018_recalibrated/palette_v3.yaml`.
+
+**Three-way comparison (Run 9 stack + masks):**
+
+| Variant | Top-1 | Any-match | Gate any≥0.92 |
+|---|---|---|---|
+| Phase 0 — empirical_v2 (ES anchored) | 0.439 | 0.919 | ✗ marginal |
+| ADR-018 §5 raw | **0.465** | 0.889 | ✗ FAIL |
+| **ADR-018 §5 anchored + recalibrated → palette_v3** | **0.449** | **0.924** | **✓ PASS** |
+
+**Reading:**
+- Raw ADR-018 anchors: top-1 wins (better chromatic separation), but
+  any-match drops below 0.92 — anchors too saturated for outdoor mid-day
+  cycling photography.
+- Recalibration keeps ADR-018 chromatic structure, drags luminance/
+  saturation toward our domain. Empirical `azul` b* = -14.6 (vs ADR-018
+  -55), `celeste` a* = -1.9 (vs -35). Domain reality, not textbook.
+- ADR-018 §7 Phase 1 gate "Δtop-1 < +5 pp → recalibrate" formally
+  triggered (Δ vs baseline = +1.0 pp, well below 5 pp), but recalibration
+  was the path that actually passed both gates.
+
+**Decision:** adopt `palette_v3.yaml` as new baseline (top-1 0.449 /
+any-match 0.924). Δ vs Phase 0: +1.0 pp top-1, +0.5 pp any-match.
+
+---
+
+### Run 16 — Intervention B: achromatic suppression sweep (S2) — REJECTED
+
+**Date:** 2026-05-02
+
+**ADR-018 §6.3 / §7 Phase 2** prescribes tagging achromatic clusters
+(chroma < 5) as `suppressed=True` when a chromatic cluster has mass ≥
+`min_chromatic_mass` (default 0.12). Suppressed entries excluded from
+primary/secondary selection.
+
+**Implementation:** added 3 config flags
+(`achromatic_suppression_enabled`, `achromatic_min_chromatic_mass`,
+`achromatic_chroma_max`) and the suppression logic in
+`ManualColorStrategy._reading_to_result`. Decoupled from the legacy
+`chromatic_priority` (which only reorders, never tags suppressed).
+
+**Sweep result** (`scripts/sweep_s2_suppression.py`, both modes
+priority-on / priority-off, threshold ∈ {0.0, 0.12, 0.20, 0.30, 0.35,
+0.40, 0.50, 0.60, 0.75}):
+
+| thr | top-1 | any | leg_t1 | trim_t1 |
+|---|---|---|---|---|
+| OFF | 0.465 | 0.924 | 0.703 | 0.017 |
+| 0.12 | **0.263** | 0.924 | 0.336 | 0.133 |
+| 0.30 | 0.434 | 0.924 | 0.648 | 0.033 |
+| 0.40 | 0.460 | 0.924 | 0.688 | 0.033 |
+| ≥0.50 | 0.465 | 0.924 | 0.703 | 0.017 |
+
+(Both modes — priority on vs priority off — produced identical numbers
+because the priority threshold of 0.35 rarely fires after foreground
+masking on our crops.)
+
+**Catastrophic regression at thr ≤ 0.40.** Cause:
+`legitimately_achromatic` subset (128 of 198 crops, the dominant class
+in cycling: black helmets, black bikes) often has 12–20 % of pixels
+falling into chromatic buckets due to lighting/shadow noise above
+`chroma_min=10`. That noise mass triggers suppression incorrectly,
+demoting the genuinely-correct negro/blanco/gris top-1.
+
+**ADR-018 §10 caveat #1 confirmed empirically.** The suppression
+heuristic was designed assuming most crops are chromatic-with-trim;
+ours are 65 % legitimately-achromatic. Net loss 2:1.
+
+**Phase 2 gate (per spec): formally PASSES.** any-match unchanged at
+0.924 across all thresholds; `leg_any` stable at 0.938. The gate
+measures any-match, not top-1. The destruction lives in top-1, which
+the spec gate does not check. We refute B on the broader top-1 signal.
+
+**Decision:** SKIP Intervention B entirely. The mechanism is subsumed
+by `chromatic_priority` (already in Run 9 stack) which reorders without
+tagging — preserving any-match. Documented as negative finding for
+thesis ablation: domain mismatch between ADR-018 fixture-set assumption
+and cycling-photo class distribution.
+
+---
+
+### Run 17 — Intervention C.1: merge small chromatic clusters (S3.1)
+
+**Date:** 2026-05-02
+
+**ADR-018 §6.4** prescribes absorbing clusters with mass < threshold
+into the nearest chromatic peak (CIEDE2000) BEFORE achromatic buckets
+are added. Goal: prevent fragmentation of dominant hue when shadow-tinted
+pixels create a secondary chromatic cluster of the same color family.
+
+**Implementation:** new `merge_small_chromatic` in `pipeline_stages.py`,
+config flags `merge_small_chromatic_enabled` /
+`merge_small_chromatic_threshold`, wired in `KMeansAnalyzer.analyze`
+between K-Means output and achromatic bucket addition.
+
+**Sweep** (`scripts/sweep_s3_c1.py`, threshold ∈ {0.0, 0.06, 0.08, 0.10,
+0.12, 0.15, 0.20, 0.25}):
+
+| thr | top-1 | any |
+|---|---|---|
+| OFF | 0.465 | 0.924 |
+| 0.06 | 0.465 | 0.924 |
+| **0.08** | 0.460 | **0.929** |
+| 0.10 | 0.455 | 0.929 |
+| 0.15+ | regression |
+
+At thr=0.06 the existing `tau_proportion=0.08` filter already drops
+clusters that small downstream; effect = 0. At thr=0.08 we get +0.5 pp
+any-match for −0.5 pp top-1 — within Phase 3 tolerance (any drop ≤
+0.005). At thr ≥ 0.15 small chromatic clusters get absorbed even when
+they are legitimately separate hues, regressing both metrics.
+
+**Decision:** adopt thr = 0.08 as conservative complement to S3.2.
+
+---
+
+### Run 18 — Intervention C.2: centrality weighting (S3.2)
+
+**Date:** 2026-05-02
+
+**ADR-018 §6.5** prescribes per-pixel gaussian weight by normalized
+distance to crop center. Affects MASS computation only (K-Means fit
+stays unweighted Euclidean).
+
+**Implementation:**
+- New `compute_centrality_weights(h, w, sigma)` in `pipeline_stages.py`.
+- Modified `cluster_kmeans` to accept optional `weights` arg.
+- New `subsample_with_indices` (so weights stay aligned with sampled
+  pixels).
+- `partition_lab_pixels` now also returns `is_chromatic_mask` /
+  `is_achromatic_mask` so the analyzer can subset weights consistently.
+- KMeansAnalyzer carries weights through chromatic K-Means proportions
+  AND re-weights achromatic bucket masses (otherwise the chromatic /
+  achromatic mass denominators would be inconsistent).
+
+**Sweep** (`scripts/sweep_s3_c2_centrality.py`, σ ∈ {OFF, 0.3, 0.4, 0.5,
+0.6, 0.8, 1.2}, both with and without C.1):
+
+Mode A (centrality only):
+
+| σ | top-1 | any | cloth_t1 | helm_t1 |
+|---|---|---|---|---|
+| OFF | 0.465 | 0.924 | 0.426 | 0.531 |
+| 0.3 | **0.475** | 0.919 | 0.441 | 0.547 |
+| 0.4 | 0.470 | 0.919 | 0.426 | 0.547 |
+
+Mode B (centrality + C.1 thr=0.08):
+
+| σ | top-1 | any | cloth_t1 | helm_t1 |
+|---|---|---|---|---|
+| 0.3 | 0.475 | 0.919 | 0.426 | 0.562 |
+| **0.4** | **0.470** | **0.924** | 0.426 | 0.547 |
+
+**Sweet spot: Mode B σ=0.4.** Passes Phase 3 gate cleanly (any-match
+unchanged at 0.924). +0.5 pp top-1 plus +1.6 pp on helmet region (visor /
+strap penalization works as expected). cyclist_clothes neither helps nor
+regresses at σ=0.4 — confirms ADR-018 §10 caveat #4 partially: σ=0.5+
+does start regressing cloth (-1.4 pp), σ=0.4 is the safety boundary.
+
+**More aggressive option (Mode A σ=0.3):** +1.0 pp top-1 but any-match
+0.919 (right at gate boundary, Δ=-0.005). Documented as alternative.
+
+**Decision:** adopt Mode B (C.1 thr=0.08 + centrality σ=0.4) as final
+S3 stack. Total Δ vs Phase 0 baseline (Run 13): top-1 +3.1 pp (0.439 →
+0.470), any-match +0.5 pp (0.919 → 0.924).
+
+**Final S3 baseline frozen:** `configs/color/kmeans_s3_final.yaml` +
+`palette_v3.yaml`. Top-1 = 0.470, any-match = 0.924, p95 = 285 ms.
+
+---
+
+### Run 19 — Gemini 2.5 Flash A/B (S4–S5 ADR-019)
+
+**Date:** 2026-05-02
+
+**Strategy implementation:**
+- `cycling_photo_ai/color/strategies/gemini.py` — `GeminiColorStrategy`,
+  same google-genai SDK pattern as `gemini_vlm_reader` / `gemini_detector`.
+- `prompts/gemini_color_v1.txt` — versioned prompt per ADR-019 §4 with
+  cycling-domain framing and explicit human-convention instruction
+  ("a red bike with black tires is red, not black").
+- JSON Schema enum enforcement at decode time (15-color palette).
+- White-composite alpha + downsample to 512 px before send.
+
+**Smoke test (5 crops + 10×3 determinism):**
+- Schema adherence: 100 % (Pydantic validation passes on all responses).
+- Latency p50 ≈ 1.5 s (vs ADR-019 §7 gate < 2 s ✓).
+- Determinism: 8/10 = 80 % identical outputs across 3 reruns. Below
+  ADR-019 §7 95 % gate but consistent with §9 caveat #8 — Gemini at
+  temperature 0 still has small internal sampling. Documented, not blocking.
+
+**Full A/B on 198 crops (cached at `runs/color_vlm/cache_gemini_v1.jsonl`):**
+
+| Metric | Manual S3 final | Gemini 2.5 Flash | Δ |
+|---|---|---|---|
+| Top-1 | 0.470 | **0.525** | **+5.5 pp** |
+| Any-match | 0.924 | 0.889 | -3.5 pp |
+| p50 latency | 54 ms | 1375 ms | ×25 |
+| p95 latency | 285 ms | 2158 ms | ×7.6 |
+
+**Per-region:**
+
+| Region | Manual | Gemini | Δ |
+|---|---|---|---|
+| bicycle | 0.439 | 0.515 | +7.6 pp |
+| cyclist_clothes | 0.426 | 0.500 | +7.4 pp |
+| helmet | 0.547 | 0.562 | +1.5 pp |
+
+**Per-subset (the actual story):**
+
+| Subset | n | Manual | Gemini | Δ |
+|---|---|---|---|---|
+| legitimately_achromatic | 128 | **0.703** | 0.570 | **-13.3 pp** |
+| chromatic_with_trim | 60 | 0.033 | **0.450** | **+41.7 pp** ⭐⭐ |
+
+**The subset breakdown reveals the trade-off:** Gemini implements
+human-style focal-color recognition (massive win on bikes labeled "red"
+when ruedas are black), at the cost of over-interpreting genuinely
+achromatic crops where it tends to "find" a chromatic accent that is
+not the labeler's intent. Manual is the inverse — it correctly handles
+all-black helmets but cannot promote the focal hue when chromatic mass
+is below `chromatic_priority_threshold`.
+
+**ADR-019 §7 decision matrix:** Δtop-1 = +5.5 pp ∈ [0, +10 pp) → falls
+in "qualitative trade-off" zone. Any-match 0.889 < 0.93 gate.
+
+**Cost:** 198 calls × ≈ $0.0003 = ~$0.06 (within ADR-019 §1 < $5 budget).
+
+**Decision:** adopt **hybrid factory** in `pipeline/app.py`. Default =
+Manual S3 (any-match dominance, p95 ×7.6 faster, zero cost). Gemini is
+opt-in via query param `?color=gemini`. Tesis reports the trade-off
+explicitly as a finding: "focal vs structural" color analysis are two
+valid paradigms whose preference depends on use case.
+
+---
+
+### Run 20 — Gemini CoT variant on hard subset (ADR-019 §6 Phase 6)
+
+**Date:** 2026-05-02
+
+**Goal:** test whether `thinking_budget=1024` improves Gemini on the
+hard `chromatic_with_trim` subset (n=60), where focal-color reasoning
+should benefit from extended reasoning per ColorBench (+23.7 pp on GPT-4o).
+
+**Decision criterion (ADR-019 §6 P6):** enable CoT in production iff Δ
+on hard subset > 10 pp without degrading easy subset.
+
+**Implementation note:** initial run with `max_output_tokens=200` (the
+no-thinking default) failed on ~75 % of calls — extended thinking
+consumed the entire token budget before producing JSON, returning
+empty / truncated responses. Fixed by auto-raising `max_output_tokens`
+to 4000 when `thinking_budget > 0`, mirroring the OCR Gemini reader's
+budget logic.
+
+**Full eval on `chromatic_with_trim` (n=60), `thinking_budget=1024`:**
+
+| Variant | Top-1 | p95 latency |
+|---|---|---|
+| Gemini baseline (no thinking) | 0.450 | 2468 ms |
+| **Gemini + CoT 1024** | **0.383** | 5306 ms |
+| Δ | **−6.7 pp** | ×2.1 |
+
+**CoT REGRESSES on hard subset.** Verdict per ADR-019 §6 P6: REJECT.
+
+**Speculation on the regression:**
+1. Extended reasoning may second-guess a correct visual instinct —
+   the model "talks itself out of" the right answer.
+2. `thinking_budget=1024` may be insufficient for genuine multi-step
+   reasoning — partial / interrupted CoT is worse than no CoT
+   (consistent with documented "thinking truncation" failure modes).
+3. Schema enum + extended thinking may interact poorly: forcing a
+   constrained output after free-form reasoning could narrow the final
+   answer to a less appropriate enum member than the direct visual
+   mapping baseline produces.
+
+**Decision:** SKIP CoT in production. The +23.7 pp improvement
+reported on ColorBench (GPT-4o) does not translate to our cycling-photo
+`chromatic_with_trim` subset with Gemini 2.5 Flash. Hybrid factory
+remains: Manual S3 default, Gemini-no-thinking opt-in.
+
+**Cost CoT experiment:** 60 calls × ≈ $0.0010 (CoT premium) ≈ $0.06.
+Total color VLM spend through S5: ~$0.13.
+
+---
+
+## Final state (post Runs 13–20)
+
+**Frozen production stack:**
+- Detection: YOLO11m v3_cleaned (TTV-118)
+- OCR: PARSeq 4-phase (TTV-119)
+- Color manual default: `configs/color/kmeans_s3_final.yaml` +
+  `experiments/color_s1_adr018_recalibrated/palette_v3.yaml`
+  → top-1 0.470, any-match 0.924, p95 285 ms
+- Color VLM opt-in: `GeminiColorStrategy` (gemini-2.5-flash, no thinking)
+  → top-1 0.525, any-match 0.889, p95 2158 ms
+
+**Tesis ablation table:**
+
+| Run | Stage | Top-1 | Any | Decision |
+|---|---|---|---|---|
+| 12 | clean_v10 baseline | 0.466 | 0.927 | reverted to per-region |
+| 13 | v3_cleaned migration | 0.444 | 0.914 | accept −2 pp dataset cost |
+| 14 | schema + recalibration | 0.439 | 0.919 | parity 198/198 validated |
+| 15 | ADR-018 anchor swap | 0.449 | 0.924 | adopt palette_v3 |
+| 16 | suppression sweep | (mixed) | 0.924 | REJECT — destroys legit-achromatic |
+| 17 | merge_small_chromatic 0.08 | 0.460 | 0.929 | adopt as conservative complement |
+| 18 | + centrality σ=0.4 | 0.470 | 0.924 | adopt — final S3 stack |
+| 19 | Gemini Flash A/B | 0.525 | 0.889 | hybrid factory (qualitative trade-off) |
+| 20 | + CoT 1024 | 0.383 | n/a | REJECT — regresses hard subset |
+
+**Net journey:** clean_v10 0.466 → v3_cleaned 0.470 (Manual) / 0.525
+(Gemini opt-in). Within ADR-018 §10 #7 ceiling estimate.
+

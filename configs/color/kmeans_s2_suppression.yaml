@@ -1,0 +1,30 @@
+type: color_analysis
+name: kmeans_s2_suppression
+seed: 42
+# Inherits Run 9 partition + chromatic-priority. Adds ADR-018 §6.3
+# achromatic suppression on top.
+chroma_min: 10.0
+lum_min: 0.0
+lum_max: 99.0
+lum_black_max: 45.0
+lum_white_min: 65.0
+min_chromatic_for_cluster: 100
+max_pixels: 20000
+k_initial: 5
+n_init: 5
+max_iter: 100
+use_minibatch: false
+minibatch_size: 1024
+tau_de_fusion: 12.0
+tau_proportion: 0.08
+max_colors: 3
+apply_gray_world: true
+min_side_px: 32
+min_total_px: 1024
+low_confidence_de_threshold: 20.0
+chromatic_priority_threshold: 0.35
+# ADR-018 §6.3 — Intervention B
+achromatic_suppression_enabled: true
+achromatic_min_chromatic_mass: 0.12
+achromatic_chroma_max: 5.0
+model_version: kmeans-v1
