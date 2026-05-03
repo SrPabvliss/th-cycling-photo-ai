@@ -23,10 +23,12 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, Query
 
+from cycling_photo_ai.color.strategies.base import ColorAnalysisStrategy
 from cycling_photo_ai.detection.inference.ports import IDetector
 from cycling_photo_ai.ocr.inference.ports import IBibReader
 from cycling_photo_ai.pipeline.schemas import (
     BibReadingItem,
+    ColorAnalysisItem,
     DetectionItem,
     HealthResponse,
     ModelsResponse,
@@ -34,16 +36,26 @@ from cycling_photo_ai.pipeline.schemas import (
     PipelineResponse,
 )
 
-# Caches: detectors / readers keyed by type → instance (lazy)
+# Caches: detectors / readers / color strategies keyed by type → instance (lazy)
 _detectors: dict[str, IDetector] = {}
 _bib_readers: dict[str, IBibReader] = {}
-_orchestrators: dict[tuple[str, str], Any] = {}
+_color_strategies: dict[str, ColorAnalysisStrategy] = {}
+_orchestrators: dict[tuple[str, str, str], Any] = {}
 
 DEFAULT_DETECTOR = os.environ.get("DETECTOR_TYPE", "yolo")
 DEFAULT_OCR = os.environ.get("OCR_TYPE", "parseq")
+DEFAULT_COLOR = os.environ.get("COLOR_STRATEGY_TYPE", "manual")
 
 AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy")
 AVAILABLE_OCRS = ("parseq", "trocr")
+AVAILABLE_COLORS = ("manual", "gemini", "none")
+
+# Manual color strategy default config + palette (final S3 stack, Run 18).
+COLOR_MANUAL_CONFIG = Path(__file__).resolve().parents[3] / "configs" / "color" / "kmeans_s3_final.yaml"
+COLOR_MANUAL_PALETTE = (
+    Path(__file__).resolve().parents[3]
+    / "experiments" / "color_s1_adr018_recalibrated" / "palette_v3.yaml"
+)
 
 
 @asynccontextmanager
@@ -52,6 +64,7 @@ async def lifespan(app: FastAPI):
     yield
     _detectors.clear()
     _bib_readers.clear()
+    _color_strategies.clear()
     _orchestrators.clear()
 
 
@@ -107,9 +120,41 @@ def _get_bib_reader(reader_type: str = DEFAULT_OCR) -> IBibReader:
     return rd
 
 
-def _get_orchestrator(detector_type: str, reader_type: str):
-    """Lazy-load full pipeline orchestrator (cached per detector/reader pair)."""
-    key = (detector_type, reader_type)
+def _get_color_strategy(strategy_type: str = DEFAULT_COLOR) -> ColorAnalysisStrategy | None:
+    """Lazy-load color strategy by type. Returns None when type='none'."""
+    if strategy_type == "none":
+        return None
+    if strategy_type in _color_strategies:
+        return _color_strategies[strategy_type]
+
+    if strategy_type == "manual":
+        from cycling_photo_ai.color.palette.calibration import load_palette_yaml
+        from cycling_photo_ai.color.strategies.manual import ManualColorStrategy
+        from cycling_photo_ai.shared.config import load_config
+
+        cfg = load_config(COLOR_MANUAL_CONFIG)
+        palette = (
+            load_palette_yaml(COLOR_MANUAL_PALETTE)
+            if COLOR_MANUAL_PALETTE.exists()
+            else None
+        )
+        strat = ManualColorStrategy(cfg, palette=palette)
+    elif strategy_type == "gemini":
+        from cycling_photo_ai.color.strategies.gemini import GeminiColorStrategy
+
+        strat = GeminiColorStrategy()
+    else:
+        raise ValueError(
+            f"Unknown color strategy={strategy_type!r}. Available: {AVAILABLE_COLORS}"
+        )
+
+    _color_strategies[strategy_type] = strat
+    return strat
+
+
+def _get_orchestrator(detector_type: str, reader_type: str, color_type: str = "none"):
+    """Lazy-load full pipeline orchestrator (cached per detector/reader/color triple)."""
+    key = (detector_type, reader_type, color_type)
     if key in _orchestrators:
         return _orchestrators[key]
 
@@ -118,6 +163,7 @@ def _get_orchestrator(detector_type: str, reader_type: str):
     orch = PipelineOrchestrator(
         detector=_get_detector(detector_type),
         bib_reader=_get_bib_reader(reader_type),
+        color_strategy=_get_color_strategy(color_type),
     )
     _orchestrators[key] = orch
     return orch
@@ -144,9 +190,13 @@ async def pipeline(
     request: PipelineRequest,
     detector: str = Query(default=DEFAULT_DETECTOR, description="Detector backend"),
     ocr: str = Query(default=DEFAULT_OCR, description="OCR reader backend"),
+    color: str = Query(
+        default=DEFAULT_COLOR,
+        description="Color strategy backend (manual | gemini | none)",
+    ),
 ) -> Any:
-    """Full detection→crop→OCR pipeline. Detector + OCR selectable via query."""
-    orch = _get_orchestrator(detector, ocr)
+    """Full detection→crop→{OCR, color} pipeline. Backends selectable via query."""
+    orch = _get_orchestrator(detector, ocr, color)
 
     image_path = await _resolve_image(request.image_url)
     try:
@@ -161,11 +211,72 @@ async def pipeline(
     return PipelineResponse(
         detections=[DetectionItem(**d) for d in result.detections],
         bib_readings=[BibReadingItem(**b) for b in result.bib_readings],
+        color_analyses=[ColorAnalysisItem(**c) for c in result.color_analyses],
         image_width=result.image_width,
         image_height=result.image_height,
         processing_ms=result.processing_ms,
-        model_versions={"detection": detector, "ocr": ocr},
+        model_versions={"detection": detector, "ocr": ocr, "color": color},
     )
+
+
+@app.post("/color/analyze")
+async def color_analyze(
+    request: PipelineRequest,
+    color: str = Query(default=DEFAULT_COLOR, description="manual | gemini"),
+) -> Any:
+    """Standalone color analysis on a single pre-cropped image (alpha optional).
+
+    Body is the same `PipelineRequest` shape used elsewhere — only `image_url`
+    is consumed. Returns a single ColorAnalysisItem (region='unknown' when
+    the caller did not provide a class label).
+    """
+    import time
+
+    import cv2
+    import numpy as np
+
+    strat = _get_color_strategy(color)
+    if strat is None:
+        raise ValueError("color='none' is not valid for /color/analyze")
+
+    image_path = await _resolve_image(request.image_url)
+    try:
+        img = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise RuntimeError(f"Failed to read image: {image_path}")
+        # Build RGBA (alpha=255 if no alpha channel present)
+        if img.ndim == 3 and img.shape[2] == 4:
+            bgra = img
+            rgb = cv2.cvtColor(bgra[..., :3], cv2.COLOR_BGR2RGB)
+            alpha = bgra[..., 3]
+        else:
+            rgb = cv2.cvtColor(img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2RGB)
+            alpha = np.full(rgb.shape[:2], 255, dtype=np.uint8)
+        rgba = np.dstack([rgb, alpha])
+
+        t0 = time.perf_counter()
+        result = strat.analyze(rgba)
+        elapsed = (time.perf_counter() - t0) * 1000
+    finally:
+        if image_path != request.image_url:
+            Path(image_path).unlink(missing_ok=True)
+
+    return {
+        "primary_color": result.primary_color,
+        "secondary_color": result.secondary_color,
+        "confidence": result.confidence,
+        "palette": [
+            {
+                "name": p.name,
+                "lab": list(p.lab),
+                "mass": p.mass,
+                "suppressed": p.suppressed,
+            }
+            for p in result.palette
+        ],
+        "strategy": result.metadata.strategy,
+        "processing_ms": round(elapsed, 2),
+    }
 
 
 @app.post("/detect/{model_id}")
@@ -206,12 +317,24 @@ async def health() -> HealthResponse:
     process = psutil.Process()
     ram_mb = process.memory_info().rss / 1e6
 
-    loaded = list(_detectors.keys()) + [f"ocr:{k}" for k in _bib_readers.keys()]
+    loaded = (
+        list(_detectors.keys())
+        + [f"ocr:{k}" for k in _bib_readers.keys()]
+        + [f"color:{k}" for k in _color_strategies.keys()]
+    )
     return HealthResponse(models_loaded=loaded, ram_usage_mb=round(ram_mb, 1))
 
 
 @app.get("/models", response_model=ModelsResponse)
 async def models() -> ModelsResponse:
-    loaded = list(_detectors.keys()) + [f"ocr:{k}" for k in _bib_readers.keys()]
-    available = list(AVAILABLE_DETECTORS) + [f"ocr:{k}" for k in AVAILABLE_OCRS]
+    loaded = (
+        list(_detectors.keys())
+        + [f"ocr:{k}" for k in _bib_readers.keys()]
+        + [f"color:{k}" for k in _color_strategies.keys()]
+    )
+    available = (
+        list(AVAILABLE_DETECTORS)
+        + [f"ocr:{k}" for k in AVAILABLE_OCRS]
+        + [f"color:{k}" for k in AVAILABLE_COLORS]
+    )
     return ModelsResponse(available=available, loaded=loaded)

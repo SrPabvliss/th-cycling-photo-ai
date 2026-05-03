@@ -40,11 +40,24 @@ class BibReadingItem(BaseModel):
     raw_ocr_text: str | None = None
 
 
+class ColorAnalysisItem(BaseModel):
+    """Single color analysis result for one region (helmet/jersey/bicycle)."""
+
+    region: str = Field(description="helmet | cyclist_clothes | bicycle")
+    primary_color: str
+    secondary_color: str | None = None
+    confidence: float = Field(ge=0.5, le=1.0)
+    bbox_source: list[float] = Field(default=[], description="Detection bbox normalized [x1,y1,x2,y2]")
+    strategy: str = Field(description="manual | gemini-2.5-flash")
+    processing_ms: int = 0
+
+
 class PipelineResponse(BaseModel):
     """POST /pipeline response body."""
 
     detections: list[DetectionItem]
     bib_readings: list[BibReadingItem]
+    color_analyses: list[ColorAnalysisItem] = []
     image_width: int
     image_height: int
     processing_ms: float

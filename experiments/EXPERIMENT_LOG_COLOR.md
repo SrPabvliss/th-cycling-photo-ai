@@ -1054,3 +1054,56 @@ Total color VLM spend through S5: ~$0.13.
 **Net journey:** clean_v10 0.466 → v3_cleaned 0.470 (Manual) / 0.525
 (Gemini opt-in). Within ADR-018 §10 #7 ceiling estimate.
 
+---
+
+### Run 21 — S6 FastAPI integration
+
+**Date:** 2026-05-02
+
+Wires color strategy into the production pipeline service per ADR-018
+§7 Phase 4 / ADR-019 §6 Phase 7.
+
+**Changes:**
+- `pipeline/schemas.py`: new `ColorAnalysisItem` (region, primary_color,
+  secondary_color, confidence, bbox_source, strategy, processing_ms);
+  `PipelineResponse.color_analyses: list[ColorAnalysisItem]` added.
+- `pipeline/orchestrator.py`: `PipelineOrchestrator.__init__` gains
+  `color_strategy: ColorAnalysisStrategy | None`. Process loop now also
+  crops `helmet` / `cyclist_clothes` / `bicycle` bboxes with 8 % padding
+  and calls `strategy.analyze(rgba)`. Image loaded once for OCR + color
+  to avoid double IO. No segmentation mask available at inference
+  (detector outputs bbox only) — uses full bbox crop with `alpha=255`.
+  Quality dip vs validation-time COCO masks expected and documented.
+- `pipeline/app.py`:
+  - `_get_color_strategy(type)` factory mirroring detector / OCR pattern.
+    Available: `manual` (default, S3 final stack +
+    `palette_v3.yaml`), `gemini`, `none`.
+  - Orchestrator cache key extended to `(detector, ocr, color)` triple.
+  - `POST /pipeline?color=manual|gemini|none` query override added.
+  - `POST /color/analyze` standalone endpoint for single-crop calls
+    (accepts BGRA / BGR / GRAY input, builds RGBA internally).
+  - `/health` and `/models` now report color strategies.
+  - Env `COLOR_STRATEGY_TYPE` for service default.
+
+**E2E smoke** (`scripts/smoke_pipeline_e2e.py`) on a v3_cleaned valid
+image: 4 detections, 1 bib reading ("1" conf 1.00), 3 color analyses
+(bicycle=black+gray 0.52, cyclist_clothes=white+black 0.51,
+helmet=white+black 0.54). Total processing 177 ms after warm-up.
+
+**`demo_visual.py` modernized:** previous version (TrOCR + GT bboxes,
+pre-audit dataset references) removed; new version uses the production
+pipeline factory and renders detection bboxes + bib OCR + per-region
+color overlay. Random sampling from `experiments/audit_adr015/dataset/
+v3_cleaned/valid/` by default. Optional `--color gemini` for VLM path.
+
+**Production-ready stacks:**
+```
+weights/yolo11m_v3cleaned/best.pt              detection
+weights/parseq_4phase/best.pt                  OCR
+configs/color/kmeans_s3_final.yaml +           color (manual default)
+experiments/color_s1_adr018_recalibrated/palette_v3.yaml
+GeminiColorStrategy via GOOGLE_AI_API_KEY      color (opt-in)
+```
+
+**Next:** tag `v1.0-color`. Color phase complete.
+
