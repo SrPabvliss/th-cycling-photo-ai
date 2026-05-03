@@ -78,8 +78,8 @@ select = [
 known-first-party = ["cycling_photo_ai"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["tests", "apps"]
+pythonpath = ["src", "."]
 
 [build-system]
 requires = ["hatchling"]
