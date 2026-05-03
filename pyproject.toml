@@ -43,6 +43,7 @@ dependencies = [
     # Modal (training infra)
     "modal>=1.4.2",
     "timm>=0.9.16",
+    "streamlit>=1.57.0",
 ]
 
 [project.optional-dependencies]
