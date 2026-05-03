@@ -38,6 +38,7 @@ from apps.comparison_viewer.config.settings import (
     DATA_ROOT,
     EXPERIMENTS_ROOT,
 )
+from apps.comparison_viewer.metrics.consensus import majority_vote_text
 from apps.comparison_viewer.pipeline_runner import run_stage
 from apps.comparison_viewer.storage import cache
 
@@ -59,8 +60,23 @@ def _detectors_with_cache(image_sha: str) -> list[str]:
     return available
 
 
-def _format_results_table(results: dict[str, tuple[str, Any]]) -> list[dict]:
-    """Build per-system rows (lectura / conf / latency / cost) for st.dataframe."""
+def _format_results_table(
+    results: dict[str, tuple[str, Any]],
+    outlier_sids: list[str] | None = None,
+) -> list[dict]:
+    """Build per-system rows (lectura / conf / latency / cost) for st.dataframe.
+
+    Args:
+        results: Mapping of system_id to (kind, record) tuples.
+        outlier_sids: List of system IDs that are outliers. If provided, outlier
+            rows are marked with "⚠️" prefix.
+
+    Returns:
+        List of row dicts for st.dataframe.
+    """
+    if outlier_sids is None:
+        outlier_sids = []
+
     rows: list[dict] = []
     for sid in sorted(results.keys()):
         kind, rec = results[sid]
@@ -77,10 +93,14 @@ def _format_results_table(results: dict[str, tuple[str, Any]]) -> list[dict]:
             )
             continue
         normalized = rec.normalized_output or {}
+        lectura = normalized.get("predicted_text") or "—"
+        # Mark outliers with ⚠️ prefix.
+        if sid in outlier_sids and lectura != "—":
+            lectura = f"⚠️ {lectura}"
         rows.append(
             {
                 "system": sid,
-                "lectura": normalized.get("predicted_text") or "—",
+                "lectura": lectura,
                 "confianza": normalized.get("confidence"),
                 "latency_ms": round(rec.latency_ms, 1),
                 "cost_usd": round(rec.cost_usd, 6),
@@ -169,6 +189,19 @@ def render(image: dict, settings: Any) -> None:
         if results:
             st.markdown("---")
             st.subheader("Resultados OCR")
-            rows = _format_results_table(results)
+
+            # Compute consensus and outliers (Task 5.3).
+            records_by_system = {
+                sid: rec.normalized_output["text"]
+                for sid, (_, rec) in results.items()
+                if rec is not None and rec.normalized_output.get("text")
+            }
+            majority_text, outlier_sids = majority_vote_text(records_by_system)
+
+            # Render consensus row if we have majority vote.
+            if majority_text:
+                st.markdown(f"**Consenso:** {majority_text}")
+
+            # Render results with outlier highlighting.
+            rows = _format_results_table(results, outlier_sids)
             st.dataframe(rows, hide_index=True, use_container_width=True)
-            # Consensus row + outlier highlighting → Task 5.3.
