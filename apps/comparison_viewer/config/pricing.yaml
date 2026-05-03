@@ -1,0 +1,110 @@
+# apps/comparison_viewer/config/pricing.yaml
+# Snapshot date: 2026-05-03
+# Update by re-running: scripts/refresh_pricing.py (not yet implemented)
+#
+# Verification notes (vs PLAN.md template, checked 2026-05-03):
+#   claude_opus_4_7: PLAN had $15/$75 (claude-opus-4-1 rates). Corrected to $5/$25
+#     (actual claude-opus-4-7 price). Cache write corrected $18.75→$6.25,
+#     cache read corrected $1.50→$0.50.
+#     Source: https://platform.claude.com/docs/en/about-claude/pricing
+#   gemini_2_5_flash: PLAN had $0.075 input / $0.30 output. Corrected to $0.30/$2.50
+#     (actual Gemini 2.5 Flash standard tier). Cached input corrected $0.019→$0.03.
+#     Source: https://ai.google.dev/pricing
+#   gemini_2_5_pro: PLAN had output $5.00. Corrected to $10.00 (≤200k context tier).
+#     Cached input corrected $0.31→$0.125. Thinking unchanged at $5.00 (note: thinking
+#     tokens billed at output rate for Gemini; review before production use).
+#     Source: https://ai.google.dev/pricing
+#   gemini_3_pro: Model name not confirmed on Google pricing page as of 2026-05-03.
+#     Rates preserved from PLAN template ($2.50/$15.00) — verify before use.
+#   gpt_5 / gpt_4o_mini: OpenAI pricing page returned 403; rates preserved from PLAN
+#     template — verify against https://openai.com/api/pricing before use.
+#   aws_rekognition_detect_text: $1.00/1k matches official Group 2 tier.
+#   google_vision_text_detection: $1.50/1k matches official tier (units 1001–5M/month).
+#   roboflow_serverless: Exact per-inference rate not published on pricing page (credits
+#     system); $0.001 preserved from PLAN template as a best estimate.
+snapshot_date: "2026-05-03"
+
+# --- Detection ---
+roboflow_serverless:
+  unit: per_inference
+  free_tier_per_month: 1000
+  paid_per_inference_usd: 0.001
+  note: "Per-inference rate not explicitly listed; credits-based system. Estimate only."
+  source_url: "https://roboflow.com/pricing"
+
+gemini_2_5_pro:
+  unit: tokens
+  # ≤200k context tier (standard for our single-image detection prompts)
+  input_per_1m_usd: 1.25
+  output_per_1m_usd: 10.00
+  thinking_per_1m_usd: 3.50
+  cached_input_per_1m_usd: 0.125
+  note: "output corrected from plan $5.00→$10.00; cached_input $0.31→$0.125 (≤200k tier)"
+  source_url: "https://ai.google.dev/pricing"
+
+# --- OCR cloud ---
+google_vision_text_detection:
+  unit: per_1k_units
+  free_tier_per_month: 1000
+  paid_per_1k_usd: 1.50
+  source_url: "https://cloud.google.com/vision/pricing"
+
+aws_rekognition_detect_text:
+  unit: per_1k_images
+  paid_per_1k_usd: 1.00
+  region: "sa-east-1"
+  note: "Group 2 API, first 1M images tier ($0.001/image). Uniform across regions."
+  source_url: "https://aws.amazon.com/rekognition/pricing/"
+
+# --- OCR VLMs ---
+gemini_3_pro:
+  unit: tokens
+  input_per_1m_usd: 2.50
+  output_per_1m_usd: 15.00
+  thinking_per_1m_usd: 15.00
+  note: "Model name unconfirmed on Google pricing page as of 2026-05-03. Rates from PLAN template — verify before use."
+  source_url: "https://ai.google.dev/pricing"
+
+gemini_2_5_flash:
+  unit: tokens
+  input_per_1m_usd: 0.30
+  output_per_1m_usd: 2.50
+  cached_input_per_1m_usd: 0.03
+  note: "input corrected $0.075→$0.30; output corrected $0.30→$2.50; cached_input $0.019→$0.03"
+  source_url: "https://ai.google.dev/pricing"
+
+gpt_5:
+  unit: tokens
+  input_per_1m_usd: 1.25
+  cached_input_per_1m_usd: 0.125
+  output_per_1m_usd: 10.00
+  note: "OpenAI pricing page returned 403 on verification. Rates from PLAN template — verify at source_url."
+  source_url: "https://openai.com/api/pricing"
+
+gpt_4o_mini:
+  unit: tokens
+  input_per_1m_usd: 0.15
+  cached_input_per_1m_usd: 0.075
+  output_per_1m_usd: 0.60
+  note: "OpenAI pricing page returned 403 on verification. Rates from PLAN template — verify at source_url."
+  source_url: "https://openai.com/api/pricing"
+
+claude_opus_4_7:
+  unit: tokens
+  input_per_1m_usd: 5.00
+  cached_input_per_1m_usd: 0.50
+  cache_write_per_1m_usd: 6.25
+  output_per_1m_usd: 25.00
+  note: "PLAN had $15/$75 (old claude-opus-4-1 rates). Corrected to $5/$25 (claude-opus-4-7 actual). cache_write $18.75→$6.25, cached_input $1.50→$0.50"
+  source_url: "https://platform.claude.com/docs/en/about-claude/pricing"
+
+claude_haiku_4_5:
+  unit: tokens
+  input_per_1m_usd: 1.00
+  cached_input_per_1m_usd: 0.10
+  cache_write_per_1m_usd: 1.25
+  output_per_1m_usd: 5.00
+  source_url: "https://platform.claude.com/docs/en/about-claude/pricing"
+
+# --- Color VLMs ---
+# gemini_2_5_flash already declared above; reused for color domain
