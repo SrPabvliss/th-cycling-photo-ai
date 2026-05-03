@@ -83,6 +83,8 @@ class GeminiColorStrategy(ColorAnalysisStrategy):
         max_output_tokens: int = 200,
         thinking_budget: int | None = None,
         max_retries: int = 3,
+        prompt_override: str | None = None,
+        enable_prompt_caching: bool = False,
     ) -> None:
         self._model_id = model_id
         self._api_key = (
@@ -112,6 +114,18 @@ class GeminiColorStrategy(ColorAnalysisStrategy):
             self._max_output_tokens = max(max_output_tokens, 4000)
         self._max_retries = max_retries
         self._client = None
+        # Mini-app integration (TTV-MINIAPP). prompt_override=None preserves
+        # file-loaded prompt; enable_prompt_caching=False keeps wire payload
+        # identical to today.
+        self._prompt_override = prompt_override
+        self._enable_prompt_caching = enable_prompt_caching
+        self._last_usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cached_input_tokens": 0,
+        }
+        self._last_request_id: str | None = None
 
     def is_loaded(self) -> bool:
         return self._client is not None
@@ -169,6 +183,15 @@ class GeminiColorStrategy(ColorAnalysisStrategy):
                 thinking_budget=self._thinking_budget,
             )
 
+        # Prompt caching hint for Gemini 2.5+ (implicit caching via
+        # system_instruction). Only set when enabled — keeps default behavior
+        # identical to pre-TTV-MINIAPP.
+        if self._enable_prompt_caching:
+            # Use the file-loaded prompt as system_instruction for cache hit.
+            cfg_kwargs["system_instruction"] = self._prompt
+
+        prompt_text = self._prompt_override if self._prompt_override else self._prompt
+
         valid_pixels = int((rgba[..., 3] >= 127).sum())
         t0 = time.perf_counter()
         last_exc: Exception | None = None
@@ -178,10 +201,11 @@ class GeminiColorStrategy(ColorAnalysisStrategy):
                     model=self._model_id,
                     contents=[
                         types.Part.from_bytes(data=png_bytes, mime_type="image/png"),
-                        self._prompt,
+                        prompt_text,
                     ],
                     config=types.GenerateContentConfig(**cfg_kwargs),
                 )
+                self._record_usage(response)
                 payload = json.loads(response.text)
                 break
             except Exception as e:
@@ -195,6 +219,29 @@ class GeminiColorStrategy(ColorAnalysisStrategy):
 
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         return _payload_to_result(payload, valid_pixels, elapsed_ms)
+
+    def _record_usage(self, response) -> None:
+        """Populate self._last_usage and self._last_request_id from response."""
+        usage = getattr(response, "usage_metadata", None)
+        self._last_usage = {
+            "input_tokens": int(getattr(usage, "prompt_token_count", 0) or 0),
+            "output_tokens": int(getattr(usage, "candidates_token_count", 0) or 0),
+            "thinking_tokens": int(getattr(usage, "thoughts_token_count", 0) or 0),
+            "cached_input_tokens": int(
+                getattr(usage, "cached_content_token_count", 0) or 0
+            ),
+        }
+        request_id: str | None = None
+        try:
+            inner = getattr(response, "_response", None)
+            headers = getattr(inner, "headers", None)
+            if headers is not None:
+                request_id = headers.get("x-request-id")
+        except Exception:
+            request_id = None
+        if request_id is None:
+            request_id = getattr(response, "response_id", None) or None
+        self._last_request_id = request_id
 
 
 def _payload_to_result(
