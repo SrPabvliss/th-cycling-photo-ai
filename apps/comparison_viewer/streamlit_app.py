@@ -66,6 +66,12 @@ def main() -> None:
         st.session_state.image_idx = 0
     if "mode" not in st.session_state:
         st.session_state.mode = "sequential"
+    if "session_id" not in st.session_state:
+        from datetime import datetime, timezone
+
+        st.session_state.session_id = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d_%H-%M-%S"
+        )
 
     navigation.render_sidebar(manifest, settings)
 

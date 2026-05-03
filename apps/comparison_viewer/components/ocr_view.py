@@ -26,6 +26,7 @@ from typing import Any
 import streamlit as st
 
 from apps.comparison_viewer.adapters.registry import list_systems_for_domain
+from apps.comparison_viewer.components import judgment_panel
 from apps.comparison_viewer.components.crop_utils import (
     crop_sha256_of,
     extract_crop,
@@ -34,6 +35,7 @@ from apps.comparison_viewer.components.live_progress import (
     format_status_line,
     run_async_in_thread,
 )
+from apps.comparison_viewer.config import settings as _settings
 from apps.comparison_viewer.config.settings import (
     DATA_ROOT,
     EXPERIMENTS_ROOT,
@@ -41,6 +43,7 @@ from apps.comparison_viewer.config.settings import (
 from apps.comparison_viewer.metrics.consensus import majority_vote_text
 from apps.comparison_viewer.pipeline_runner import run_stage
 from apps.comparison_viewer.storage import cache
+from apps.comparison_viewer.storage.judgments import load_judgments_for_image
 
 
 # Bib class label string emitted by every detection adapter (yolo11m,
@@ -205,3 +208,30 @@ def render(image: dict, settings: Any) -> None:
             # Render results with outlier highlighting.
             rows = _format_results_table(results, outlier_sids)
             st.dataframe(rows, hide_index=True, use_container_width=True)
+
+            # Per-system judgment panels.
+            session_id = st.session_state.get("session_id", "default")
+            priors = load_judgments_for_image(
+                _settings.JUDGMENTS_ROOT, image["sha256"]
+            )
+            prior_by_key = {
+                (p.stage, p.system_id, p.parent_crop_sha256, p.region): p
+                for p in priors
+            }
+            for sid in sorted(results.keys()):
+                kind, rec = results[sid]
+                lectura = "—"
+                if rec is not None:
+                    lectura = rec.normalized_output.get("predicted_text") or "—"
+                with st.expander(f"Juicio — {sid} · {lectura}", expanded=False):
+                    prior = prior_by_key.get(("ocr", sid, crop_sha, None))
+                    judgment_panel.render(
+                        stage="ocr",
+                        image_sha=image["sha256"],
+                        system_id=sid,
+                        session_id=session_id,
+                        parent_crop_sha=crop_sha,
+                        prior_codes=prior.judgment_codes if prior else None,
+                        prior_correct=prior.correct_value if prior else None,
+                        prior_notes=prior.notes if prior else None,
+                    )

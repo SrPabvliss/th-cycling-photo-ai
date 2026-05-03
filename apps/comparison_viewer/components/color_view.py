@@ -29,6 +29,7 @@ from typing import Any
 import streamlit as st
 
 from apps.comparison_viewer.adapters.registry import list_systems_for_domain
+from apps.comparison_viewer.components import judgment_panel
 from apps.comparison_viewer.components.crop_utils import (
     crop_sha256_of,
     extract_crop,
@@ -37,12 +38,14 @@ from apps.comparison_viewer.components.live_progress import (
     format_status_line,
     run_async_in_thread,
 )
+from apps.comparison_viewer.config import settings as _settings
 from apps.comparison_viewer.config.settings import (
     DATA_ROOT,
     EXPERIMENTS_ROOT,
 )
 from apps.comparison_viewer.pipeline_runner import run_stage
 from apps.comparison_viewer.storage import cache
+from apps.comparison_viewer.storage.judgments import load_judgments_for_image
 
 
 # Region label strings emitted by every detection adapter (must match
@@ -201,3 +204,39 @@ def render(image: dict, settings: Any) -> None:
             st.subheader("Resultados Color")
             rows = _format_color_rows(results_by_region)
             st.dataframe(rows, hide_index=True, use_container_width=True)
+
+            # Per-(region, system) judgment panels.
+            session_id = st.session_state.get("session_id", "default")
+            priors = load_judgments_for_image(
+                _settings.JUDGMENTS_ROOT, image["sha256"]
+            )
+            prior_by_key = {
+                (p.stage, p.system_id, p.parent_crop_sha256, p.region): p
+                for p in priors
+            }
+            for region, (_crop_img, region_crop_sha) in crops_by_region.items():
+                bucket = results_by_region.get(region, {})
+                for sid in sorted(bucket.keys()):
+                    kind, rec = bucket[sid]
+                    primary = "—"
+                    if rec is not None:
+                        primary = (
+                            rec.normalized_output.get("primary_color") or "—"
+                        )
+                    label = f"Juicio — {region} · {sid} · {primary}"
+                    with st.expander(label, expanded=False):
+                        prior = prior_by_key.get(
+                            ("color", sid, region_crop_sha, region)
+                        )
+                        judgment_panel.render(
+                            stage="color",
+                            image_sha=image["sha256"],
+                            system_id=sid,
+                            session_id=session_id,
+                            parent_crop_sha=region_crop_sha,
+                            region=region,
+                            prior_codes=(
+                                prior.judgment_codes if prior else None
+                            ),
+                            prior_notes=prior.notes if prior else None,
+                        )

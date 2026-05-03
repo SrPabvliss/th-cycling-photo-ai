@@ -26,16 +26,19 @@ from PIL import Image, ImageDraw
 import streamlit as st
 
 from apps.comparison_viewer.adapters.registry import list_systems_for_domain
+from apps.comparison_viewer.components import judgment_panel
 from apps.comparison_viewer.components.live_progress import (
     SYSTEM_COLORS,
     format_status_line,
     run_async_in_thread,
 )
+from apps.comparison_viewer.config import settings as _settings
 from apps.comparison_viewer.config.settings import (
     DATA_ROOT,
     EXPERIMENTS_ROOT,
 )
 from apps.comparison_viewer.pipeline_runner import run_stage
+from apps.comparison_viewer.storage.judgments import load_judgments_for_image
 
 
 def render_overlay(
@@ -131,3 +134,34 @@ def render(image: dict, settings: Any) -> None:
             # Render and display overlay
             overlay = render_overlay(image_path, results, toggles)
             st.image(overlay, width=600, caption="Detections with bounding boxes")
+
+            # Per-system judgment panels.
+            session_id = st.session_state.get("session_id", "default")
+            priors = load_judgments_for_image(
+                _settings.JUDGMENTS_ROOT, image["sha256"]
+            )
+            prior_by_key = {
+                (p.stage, p.system_id, p.parent_crop_sha256, p.region): p
+                for p in priors
+            }
+            for sid in sorted(results.keys()):
+                kind, rec = results[sid]
+                with st.expander(f"Juicio — {sid}", expanded=False):
+                    if rec is not None:
+                        n_boxes = len(rec.normalized_output.get("bboxes", []))
+                        st.caption(
+                            f"status={kind} · n_boxes={n_boxes} · "
+                            f"latency={rec.latency_ms:.0f}ms · "
+                            f"cost=${rec.cost_usd:.6f}"
+                        )
+                    else:
+                        st.caption(f"status={kind}")
+                    prior = prior_by_key.get(("detection", sid, None, None))
+                    judgment_panel.render(
+                        stage="detection",
+                        image_sha=image["sha256"],
+                        system_id=sid,
+                        session_id=session_id,
+                        prior_codes=prior.judgment_codes if prior else None,
+                        prior_notes=prior.notes if prior else None,
+                    )
