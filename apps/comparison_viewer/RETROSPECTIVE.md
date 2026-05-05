@@ -180,9 +180,18 @@ la verdad. Gemini sobre-interpreta y se inventa acentos.
 
 ### Decisión documentada
 
-ADR-019 cierra el epic: **hybrid factory**, manual_kmeans default + Gemini
-opt-in via query param. **Veredicto subjetivo del evaluador coincide con
-veredicto cuantitativo + arquitectónico.**
+ADR-019 §7 (hybrid factory · manual_kmeans default + Gemini opt-in)
+**invalidado** por la eval manual del mini-app. La métrica `any-match`
+del cache automatizado Run 19 (sobre la que descansaba §7) era
+estructuralmente insensible al modo de fallo real: manual emite
+black/gray como candidato casi siempre, y los GT incluyen achromáticos
+co-ocurrentes (ruedas, sombras), por lo que `any-match` capaba en ~0.92
+sin captar si la estrategia identificó el color focal. Eval humana
+(n=286) muestra Gemini 82.1% exact / 97.8% exact+approx vs Manual
+11.0% / 72.0% (McNemar p<0.000001). **Manual desconectado del
+pipeline** (`AVAILABLE_COLORS = ("gemini", "none")`); código manual
+permanece en repo como referencia académica. Ver Run 22 en
+`experiments/EXPERIMENT_LOG_COLOR.md`.
 
 ### Manual `manual_kmeans` colapsa a achromático
 
@@ -197,8 +206,20 @@ guiada por prompt). Out of scope para esta tesis.
 
 ## Pipeline final propuesta
 
-**YOLO11m (detección) → PARSeq (OCR) + revisión humana → manual_kmeans default · Gemini 2.5 Flash opt-in (color)**
+**YOLO11m (detección) → PARSeq (OCR) + revisión humana → Gemini 2.5 Flash (color)**
 
-Validada por evaluador (60 imágenes, 3 dominios) y por datos canónicos del
-proyecto (audit_adr015 detection, EXPERIMENT_LOG_OCR runs 14-16, EXPERIMENT_LOG_COLOR
-runs 19-20, ADRs 015/016/018/019).
+Validada por evaluador (67 imágenes, 3 dominios) y por datos canónicos del
+proyecto (audit_adr015 detection, EXPERIMENT_LOG_OCR runs 14-16,
+EXPERIMENT_LOG_COLOR runs 19-22, ADRs 015/016/018/019). El eje color queda
+**Gemini-only**: el manual k-means se desconecta del pipeline tras la eval
+manual (Run 22) que invalidó la decisión §7 de ADR-019. Manual no es
+recuperable dentro del scope (limitación de dominio: bbox crops sin
+segmentación semántica colapsan sistemáticamente a achromático).
+
+**Trade-off de Gemini documentado y aceptado, no ignorado:** ×7.6 más lento
+en p95 (2158 ms vs 285 ms) y ~$0.0003/crop (vs $0 del manual). Aparece en
+todas las tablas comparativas — no se omite ni se minimiza. Lo aceptamos
+porque es el costo de obtener un resultado que el manual no entrega
+(82.1% vs 11.0% exact+eq) y que no podemos igualar dentro del scope. La
+revisión humana del pipeline absorbe la latencia (no es ruta crítica
+realtime) y el costo escala con volumen de imágenes acotado.

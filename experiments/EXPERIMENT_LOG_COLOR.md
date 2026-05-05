@@ -1107,3 +1107,164 @@ GeminiColorStrategy via GOOGLE_AI_API_KEY      color (opt-in)
 
 **Next:** tag `v1.0-color`. Color phase complete.
 
+> **Note (post Run 22, 2026-05-04):** the `Available: manual (default, ...),
+> gemini, none` factory described above was superseded. Manual was
+> disconnected from the runtime pipeline after the manual-evaluation
+> override invalidated the cache-based decision. Current state:
+> `AVAILABLE_COLORS = ("gemini", "none")`, `DEFAULT_COLOR = "gemini"`.
+> Manual code retained in repo for academic reference but not exposed.
+> See Run 22 below.
+
+---
+
+### Run 22 — Manual evaluation override (ADR-019 §7 SUPERSEDED)
+
+**Date:** 2026-05-04
+
+**Goal:** validate Run 19's hybrid-factory decision with a human-in-the-loop
+evaluation on real production-style imagery, since the §7 decision rested
+entirely on an automated `any-match` metric computed against a fixed labeler
+ground truth.
+
+**Setup:**
+- Mini-app `apps/comparison_viewer` (Streamlit) — Pablo Villacrés as sole
+  evaluator.
+- Dataset: `experiments/exploratorio` (67 images, 10 retest groups,
+  6-7 photos/group). Disjoint from Run 19's 198-crop test set.
+- Color systems compared: `manual_kmeans` (S3 final stack, identical to
+  Run 19 production config) vs `gemini_2_5_flash_color` (same
+  `GeminiColorStrategy`, gemini-2.5-flash, no thinking, JSON schema enum).
+- Per-image, per-region judgments with codes
+  `match_exact | match_approx | equivalent | wrong | bad_crop`.
+- Persistence: `judgments/session_2026-05-04_15-56-20.jsonl` (954 lines,
+  286 color judgments across helmet / cyclist_clothes / bicycle).
+
+**Headline (n=286 color judgments, 67 images):**
+
+| System | exact+equivalent | exact+approx (any-correct) | wrong | latency p50 |
+|---|---|---|---|---|
+| manual_kmeans | **11.0%** | 72.0% | 27.4% | 85 ms |
+| **gemini_2_5_flash_color** | **82.1%** | **97.8%** | 2.1% | 1859 ms |
+
+**Per-system breakdown:**
+
+| System | n | match_exact | match_approx | wrong | equivalent |
+|---|---|---|---|---|---|
+| manual_kmeans | 146 | 12 | 89 | 40 | 4 |
+| gemini_2_5_flash_color | 140 | 114 | 22 | 3 | 1 |
+
+**Statistical test (image-level paired McNemar, focal-color exact+equivalent):**
+- gemini wins: 45 images
+- manual wins: 0 images
+- p < 0.000001 ⭐⭐⭐
+
+**Why Run 19's `any-match 0.924` was misleading:**
+
+`any-match` accepted ANY of K predicted colors as correct against the
+labeler-assigned exact color. On bbox crops "sucios" (background, legs,
+ground, road), manual k-means almost always emits black/white/gray as
+one of its candidates because achromatic pixels dominate the histogram —
+and most ground-truth labels include black/gray as a co-occurring color
+on tires, shadows, road. So `any-match` capped near `~0.92` for any
+strategy that returns black+gray as fallback, regardless of whether it
+identified the focal hue. The metric was structurally insensitive to
+the exact failure mode that matters in production: **identifying the
+visually salient color a human reports**.
+
+The manual evaluation removes that artifact: a human reading "the
+bicycle is red" expects "red", not "the algorithm correctly enumerated
+the tire's black".
+
+**Domain limitation (root cause of manual's failure):**
+
+Manual k-means operates at pixel level on the full bbox crop. Bbox crops
+inherently contain bicycle + legs + ground + background. K-means averages
+all pixels with no semantic notion of "what is the bicycle". On
+chromatic_with_trim cases (focal-colored frame + black wheels + black
+clothing) the dominant cluster is consistently achromatic — "color
+blind" for any saturated focal hue. Tuning K, chroma threshold, anchor
+recalibration (ADR-018), suppression (Run 16), centrality weighting
+(Run 18) all fail to address the root cause: **without semantic
+segmentation, manual cannot select which pixels constitute the
+referent of the prompt**.
+
+Gemini wins not by margin but by architecture — VLM prompting
+("color of the bicycle") performs implicit semantic segmentation,
+attending only to bicycle pixels and ignoring the rest.
+
+**Decision (overrides ADR-019 §7):**
+
+1. `DEFAULT_COLOR = "gemini"` in `pipeline/app.py`.
+2. `AVAILABLE_COLORS = ("gemini", "none")` — manual disconnected from
+   runtime pipeline. No `?color=manual` query option, no env override.
+3. Manual code (`color/strategies/manual.py`, configs, palettes) retained
+   in repo for academic reference and reproducibility of Runs 1-21.
+   Not exposed as a production option.
+4. **Latency + cost trade-off (explicitly accepted, not hidden).**
+   Gemini is 7.6× slower in p95 (Manual 285 ms → Gemini 2158 ms) and
+   ~$0.0003/crop (Manual $0). This is not omitted from comparisons —
+   it's reported in every ablation table and the public README.
+   It's the price of architectural correctness: the gap on quality is
+   structural-domain (segmentation semántica), no tuning of manual
+   closes it within the thesis scope. Trade is conscious and documented:
+   we accept slower and costlier in exchange for the only result the
+   pipeline can actually use. Human review tolerates the latency
+   because color is a reviewer-correctable field, not a hard-realtime
+   gate. Cost ceiling is bounded (image-volume × $0.0003) and well
+   below alternatives (Imagga / Ximilar 6-12× more) per ADR-019 §1.
+5. ADR-019 §7 decision matrix marked **SUPERSEDED**. ADR-019 itself
+   stands as documentation of the VLM evaluation framework; only the
+   §7 verdict ("hybrid · Manual default") is reversed.
+
+**Tesis framing:** the experiment teaches that automated proxy metrics
+on weakly-supervised labelers can mislead architectural decisions when
+the metric does not align with downstream human-judged quality. Manual
+evaluation is necessary in domains with ambiguous referents
+(focal-color, segmentation-implicit prompts).
+
+---
+
+## Final state (post Run 22, 2026-05-04) — supersedes the "Final state (post Runs 13-20)" section above
+
+**Frozen production stack:**
+- Detection: YOLO11m v3_cleaned (TTV-118)
+- OCR: PARSeq 4-phase (TTV-119)
+- Color: **`GeminiColorStrategy`** (gemini-2.5-flash, no thinking,
+  JSON schema enum, 15-color palette ADR-018).
+  - Quality: exact+equivalent 82.1% in manual eval (n=286).
+  - Latency: p50 1859 ms / p95 ~2.2 s. **Accepted trade-off** vs
+    Manual p95 285 ms (×7.6 slower).
+  - Cost: ~$0.0003 per crop. **Accepted trade-off** vs Manual $0.
+  - Justification for the trade: quality gap on focal-color is
+    structural-domain (no semantic segmentation in manual), not
+    closeable with tuning; pipeline downstream review is human-paced,
+    not realtime; per-image cost ceiling bounded.
+- Color manual: **disconnected from pipeline**. Code preserved in repo
+  for academic reference. Reported in comparisons as the lower-quality /
+  zero-cost / sub-second baseline that Gemini explicitly trades off.
+
+**Tesis ablation table (extended):**
+
+| Run | Stage | Top-1 / Acc | Any / exact+approx | Decision |
+|---|---|---|---|---|
+| 12 | clean_v10 baseline | 0.466 | 0.927 | reverted to per-region |
+| 13 | v3_cleaned migration | 0.444 | 0.914 | accept −2 pp dataset cost |
+| 14 | schema + recalibration | 0.439 | 0.919 | parity 198/198 validated |
+| 15 | ADR-018 anchor swap | 0.449 | 0.924 | adopt palette_v3 |
+| 16 | suppression sweep | (mixed) | 0.924 | REJECT — destroys legit-achromatic |
+| 17 | merge_small_chromatic 0.08 | 0.460 | 0.929 | adopt as conservative complement |
+| 18 | + centrality σ=0.4 | 0.470 | 0.924 | adopt — final S3 stack |
+| 19 | Gemini Flash A/B (auto) | 0.525 | 0.889 | hybrid (qualitative trade-off) |
+| 20 | + CoT 1024 | 0.383 | n/a | REJECT — regresses hard subset |
+| 21 | S6 FastAPI integration | n/a | n/a | factory wired (manual default) |
+| **22** | **Manual eval override** | **Gemini 0.821 / Manual 0.110** | **Gemini 0.978 / Manual 0.720** | **Gemini-only · manual disconnected · ADR-019 §7 SUPERSEDED** |
+
+**Production-ready stacks (post Run 22):**
+```
+weights/yolo11m_v3cleaned/best.pt              detection
+weights/parseq_4phase/best.pt                  OCR
+GeminiColorStrategy via GOOGLE_AI_API_KEY      color (default, only option)
+```
+
+**Next:** tag `v1.0-color`. Color phase complete.
+

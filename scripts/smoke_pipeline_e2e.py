@@ -1,7 +1,8 @@
 """E2E smoke test: detect → OCR + color on a single image.
 
 Verifies orchestrator wiring + factory pattern + ColorAnalysisItem schema.
-Does NOT call Gemini (manual default) to avoid API spend on smoke runs.
+Color stage: Gemini 2.5 Flash (production default post Run 22). Requires
+GOOGLE_AI_API_KEY env. Per-run cost ~$0.001 — keep smoke runs sparse.
 """
 
 from __future__ import annotations
@@ -34,8 +35,8 @@ def main() -> None:
         for r in res.bib_readings[:3]:
             print(f"    bib: {r['digits']!r} conf={r['confidence']:.2f} status={r['status']}")
 
-    print("\n=== detect → OCR + color (manual) ===")
-    orch = _get_orchestrator("yolo", "parseq", "manual")
+    print("\n=== detect → OCR + color (gemini) ===")
+    orch = _get_orchestrator("yolo", "parseq", "gemini")
     res = orch.process(image_path)
     print(f"  detections:     {len(res.detections)}")
     print(f"  color_analyses: {len(res.color_analyses)}")

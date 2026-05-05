@@ -44,18 +44,14 @@ _orchestrators: dict[tuple[str, str, str], Any] = {}
 
 DEFAULT_DETECTOR = os.environ.get("DETECTOR_TYPE", "yolo")
 DEFAULT_OCR = os.environ.get("OCR_TYPE", "parseq")
-DEFAULT_COLOR = os.environ.get("COLOR_STRATEGY_TYPE", "manual")
+# Manual k-means disconnected from runtime pipeline post Run 22 (see
+# experiments/EXPERIMENT_LOG_COLOR.md). Manual code retained in repo for
+# academic reference only; not exposed as a runtime option.
+DEFAULT_COLOR = os.environ.get("COLOR_STRATEGY_TYPE", "gemini")
 
 AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy")
 AVAILABLE_OCRS = ("parseq", "trocr")
-AVAILABLE_COLORS = ("manual", "gemini", "none")
-
-# Manual color strategy default config + palette (final S3 stack, Run 18).
-COLOR_MANUAL_CONFIG = Path(__file__).resolve().parents[3] / "configs" / "color" / "kmeans_s3_final.yaml"
-COLOR_MANUAL_PALETTE = (
-    Path(__file__).resolve().parents[3]
-    / "experiments" / "color_s1_adr018_recalibrated" / "palette_v3.yaml"
-)
+AVAILABLE_COLORS = ("gemini", "none")
 
 
 @asynccontextmanager
@@ -127,19 +123,7 @@ def _get_color_strategy(strategy_type: str = DEFAULT_COLOR) -> ColorAnalysisStra
     if strategy_type in _color_strategies:
         return _color_strategies[strategy_type]
 
-    if strategy_type == "manual":
-        from cycling_photo_ai.color.palette.calibration import load_palette_yaml
-        from cycling_photo_ai.color.strategies.manual import ManualColorStrategy
-        from cycling_photo_ai.shared.config import load_config
-
-        cfg = load_config(COLOR_MANUAL_CONFIG)
-        palette = (
-            load_palette_yaml(COLOR_MANUAL_PALETTE)
-            if COLOR_MANUAL_PALETTE.exists()
-            else None
-        )
-        strat = ManualColorStrategy(cfg, palette=palette)
-    elif strategy_type == "gemini":
+    if strategy_type == "gemini":
         from cycling_photo_ai.color.strategies.gemini import GeminiColorStrategy
 
         strat = GeminiColorStrategy()
@@ -192,7 +176,7 @@ async def pipeline(
     ocr: str = Query(default=DEFAULT_OCR, description="OCR reader backend"),
     color: str = Query(
         default=DEFAULT_COLOR,
-        description="Color strategy backend (manual | gemini | none)",
+        description="Color strategy backend (gemini | none)",
     ),
 ) -> Any:
     """Full detection→crop→{OCR, color} pipeline. Backends selectable via query."""
@@ -222,7 +206,7 @@ async def pipeline(
 @app.post("/color/analyze")
 async def color_analyze(
     request: PipelineRequest,
-    color: str = Query(default=DEFAULT_COLOR, description="manual | gemini"),
+    color: str = Query(default=DEFAULT_COLOR, description="gemini"),
 ) -> Any:
     """Standalone color analysis on a single pre-cropped image (alpha optional).
 

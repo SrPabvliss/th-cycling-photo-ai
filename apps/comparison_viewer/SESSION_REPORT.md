@@ -8,7 +8,24 @@
 
 ## Pipeline final
 
-**YOLO11m (detección) → PARSeq (OCR) + revisión humana → manual_kmeans default · Gemini 2.5 Flash opt-in (color)**
+**YOLO11m (detección) → PARSeq (OCR) + revisión humana → Gemini 2.5 Flash (color)**
+
+Manual k-means desconectado del pipeline. Limitación estructural de dominio:
+operar a nivel de píxeles sobre bbox crops "sucios" (con fondo, piernas, suelo)
+sin segmentación semántica colapsa sistemáticamente a achromático
+(negro/blanco/gris) en presencia de colores focales reales (rojo, morado, azul,
+amarillo). Ningún tuning de K, thresholds o paleta resuelve la causa raíz.
+Gemini gana por razonamiento sobre el referente del prompt ("color de la
+bicicleta"), no por margen incremental.
+
+**Trade-off explícito y aceptado (no oculto):** Gemini es ×7.6 más lento que
+Manual en p95 (2158 ms vs 285 ms) y cuesta ~$0.0003/crop vs $0. Aceptamos el
+trade-off porque la calidad que ofrece (82.1% exact+eq vs 11.0% del manual)
+no la igualamos con la implementación manual dentro del scope de la tesis —
+el problema es de dominio (segmentación semántica), no de tuning. El pipeline
+tolera la latencia porque la revisión es humana / no realtime, y el techo de
+costo está acotado por volumen de imágenes. Ambos números aparecen en todas
+las tablas comparativas del reporte.
 
 ## Métricas con CIs y tests pareados (McNemar binomial exacto)
 
@@ -60,8 +77,15 @@ PARSeq estadísticamente superior a 5 sistemas (Vision, Haiku, TrOCR, Gemini-3-P
 
 **McNemar: gemini+=45, manual+=0, p<0.000001 ***  ** — diferencia masiva en 67 imgs.
 Gemini gana en 45/67 imágenes que manual erra; manual nunca gana en una imagen
-que Gemini erra. Hammer estadístico. Hybrid factory (manual default + Gemini
-opt-in para focal-color) confirmado vs ADR-019.
+que Gemini erra. Hammer estadístico.
+
+**ADR-019 §7 obsoleto.** La decisión "hybrid factory · manual default + Gemini
+opt-in" se basaba en el cache automatizado Run 19 cuya métrica `any-match`
+contra labeler GT estricto penalizaba el focal-color de Gemini. Eval manual
+humana (n=286 juicios color, 67 imágenes) invierte la decisión: Gemini 86.6%
+exact+equivalent vs manual 19.4%. Manual desconectado del pipeline
+(`AVAILABLE_COLORS = ("gemini", "none")`); código manual permanece en repo
+como referencia académica pero no se expone como opción runtime.
 
 ### Distribución de errores OCR
 
@@ -97,9 +121,13 @@ para diseño de revisión humana — la mayoría de sistemas no auto-rechaza.
 |---|---|---|---|
 | Detection | YOLO11m | YOLO11m (audit_adr015 prod recall +10.5pp vs RFDETR) | ✅ |
 | OCR | PARSeq | PARSeq 4-phase EM@80=98.7% (Run 14) | ✅ |
-| Color | Gemini > manual focal | Gemini +5.5pp top-1, +41.7pp chromatic_with_trim (Run 19-20) | ✅ |
+| Color | **Gemini gana, manual desconectado** | Run 19-20 (cache auto) decía hybrid; eval manual lo invierte | ⚠️ revisado |
 
-3/3 dominios concordantes. Decisión robusta.
+Detection y OCR concordantes con épicas canónicas. Color: la eval manual
+del mini-app **invalida** la decisión §7 del ADR-019 — métrica `any-match`
+del cache no captura calidad focal-color real. Manual k-means queda fuera
+del pipeline por limitación de dominio (segmentación semántica imposible
+sobre bbox crops sucios).
 
 ## Cobertura sesión
 
