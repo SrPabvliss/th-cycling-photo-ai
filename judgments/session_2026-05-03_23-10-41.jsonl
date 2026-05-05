@@ -1,0 +1,1 @@
+{"session_id":"2026-05-03_23-10-41","image_sha256":"47ff6e52119c59d27850a86969bf0a976da9ea95822b265a7ad30a33bd52aa8e","stage":"detection","system_id":"yolo11m","parent_crop_sha256":null,"region":null,"judgment_codes":["correct"],"correct_value":null,"notes":"didnt get cyclist with bike (not an actual problem rn)","judged_at":"2026-05-03T23:13:31.289496+00:00"}
