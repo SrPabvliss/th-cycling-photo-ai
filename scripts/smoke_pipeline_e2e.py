@@ -30,17 +30,20 @@ def main() -> None:
     print(f"  detections:     {len(res.detections)}")
     print(f"  bib_readings:   {len(res.bib_readings)}")
     print(f"  color_analyses: {len(res.color_analyses)}")
-    print(f"  processing_ms:  {res.processing_ms:.0f}")
+    print(f"  total_ms:       {res.processing_ms:.0f}  "
+          f"(detection={res.detection_ms:.0f}, ocr={res.ocr_ms:.0f}, color={res.color_ms:.0f})")
     if res.bib_readings:
         for r in res.bib_readings[:3]:
-            print(f"    bib: {r['digits']!r} conf={r['confidence']:.2f} status={r['status']}")
+            print(f"    bib: {r['digits']!r} conf={r['confidence']:.2f} "
+                  f"status={r['status']} ocr_ms={r['processing_ms']:.0f}")
 
     print("\n=== detect → OCR + color (gemini) ===")
     orch = _get_orchestrator("yolo", "parseq", "gemini")
     res = orch.process(image_path)
     print(f"  detections:     {len(res.detections)}")
     print(f"  color_analyses: {len(res.color_analyses)}")
-    print(f"  processing_ms:  {res.processing_ms:.0f}")
+    print(f"  total_ms:       {res.processing_ms:.0f}  "
+          f"(detection={res.detection_ms:.0f}, ocr={res.ocr_ms:.0f}, color={res.color_ms:.0f})")
     for c in res.color_analyses:
         print(f"    {c['region']:<18} primary={c['primary_color']:<10} "
               f"sec={str(c['secondary_color']):<10} conf={c['confidence']:.2f} "

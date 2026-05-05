@@ -34,6 +34,7 @@ from cycling_photo_ai.pipeline.schemas import (
     ModelsResponse,
     PipelineRequest,
     PipelineResponse,
+    StageTimings,
 )
 
 # Caches: detectors / readers / color strategies keyed by type → instance (lazy)
@@ -199,6 +200,12 @@ async def pipeline(
         image_width=result.image_width,
         image_height=result.image_height,
         processing_ms=result.processing_ms,
+        timings=StageTimings(
+            total_ms=result.processing_ms,
+            detection_ms=result.detection_ms,
+            ocr_ms=result.ocr_ms,
+            color_ms=result.color_ms,
+        ),
         model_versions={"detection": detector, "ocr": ocr, "color": color},
     )
 

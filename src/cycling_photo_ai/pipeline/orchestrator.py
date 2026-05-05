@@ -29,6 +29,9 @@ class PipelineResult:
     image_width: int = 0
     image_height: int = 0
     processing_ms: float = 0.0
+    detection_ms: float = 0.0
+    ocr_ms: float = 0.0
+    color_ms: float = 0.0
     errors: list[str] = field(default_factory=list)
 
 
@@ -87,9 +90,13 @@ class PipelineOrchestrator:
         """
         start = time.perf_counter()
         errors: list[str] = []
+        ocr_ms_total = 0.0
+        color_ms_total = 0.0
 
         # Step 1 — Detection
+        det_start = time.perf_counter()
         raw_detections = self._detector.detect(image_path)
+        detection_ms = (time.perf_counter() - det_start) * 1000
         detections = [
             d for d in raw_detections
             if d.confidence >= self._confidence_threshold
@@ -131,7 +138,10 @@ class PipelineOrchestrator:
                     if crop_data is None:
                         continue
                     crop, _abs = crop_data
+                    ocr_t0 = time.perf_counter()
                     reading = self._bib_reader.read(crop)
+                    ocr_item_ms = (time.perf_counter() - ocr_t0) * 1000
+                    ocr_ms_total += ocr_item_ms
                     if startlist and reading.status != "abstained":
                         if reading.digits in startlist:
                             reading = BibReading(
@@ -163,6 +173,7 @@ class PipelineOrchestrator:
                         "preprocessing_applied": reading.preprocessing_applied or [],
                         "bbox_source": list(det.bbox),
                         "raw_ocr_text": reading.raw_text,
+                        "processing_ms": round(ocr_item_ms, 2),
                     })
 
             # Step 3 — Color analysis for helmet / cyclist_clothes / bicycle
@@ -186,6 +197,7 @@ class PipelineOrchestrator:
                     except Exception as e:
                         errors.append(f"color({det.class_name}): {e}")
                         continue
+                    color_ms_total += cresult.metadata.processing_ms
                     color_analyses.append({
                         "region": det.class_name,
                         "primary_color": cresult.primary_color,
@@ -205,5 +217,8 @@ class PipelineOrchestrator:
             image_width=img_width,
             image_height=img_height,
             processing_ms=round(elapsed_ms, 2),
+            detection_ms=round(detection_ms, 2),
+            ocr_ms=round(ocr_ms_total, 2),
+            color_ms=round(color_ms_total, 2),
             errors=errors,
         )

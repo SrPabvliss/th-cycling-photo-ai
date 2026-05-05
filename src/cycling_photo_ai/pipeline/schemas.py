@@ -38,6 +38,7 @@ class BibReadingItem(BaseModel):
     preprocessing_applied: list[str] = []
     bbox_source: list[float] = Field(default=[], description="Detection bbox that produced this crop")
     raw_ocr_text: str | None = None
+    processing_ms: float = Field(default=0.0, description="Wall-clock ms spent on this single OCR call (orchestrator-measured)")
 
 
 class ColorAnalysisItem(BaseModel):
@@ -52,15 +53,32 @@ class ColorAnalysisItem(BaseModel):
     processing_ms: int = 0
 
 
+class StageTimings(BaseModel):
+    """Per-stage wall-clock breakdown of pipeline processing.
+
+    All values are orchestrator-measured (`time.perf_counter()`) and exclude
+    network IO for image fetch. `*_ms` aggregates are the sum of per-item
+    times for stages that loop over detections (ocr, color); detection is
+    a single call.
+    """
+
+    total_ms: float = Field(description="Full pipeline wall-clock ms (= PipelineResponse.processing_ms)")
+    detection_ms: float = Field(default=0.0, description="Detection stage ms (single call)")
+    ocr_ms: float = Field(default=0.0, description="OCR stage ms (sum of per-item BibReadingItem.processing_ms)")
+    color_ms: float = Field(default=0.0, description="Color stage ms (sum of per-item ColorAnalysisItem.processing_ms)")
+
+
 class PipelineResponse(BaseModel):
     """POST /pipeline response body."""
 
+    schema_version: str = Field(default="1.0", description="Response schema version. Backend should pin and detect mismatches. Bumped on breaking changes; minor non-breaking additions stay on the same major.")
     detections: list[DetectionItem]
     bib_readings: list[BibReadingItem]
     color_analyses: list[ColorAnalysisItem] = []
     image_width: int
     image_height: int
     processing_ms: float
+    timings: StageTimings = Field(default_factory=lambda: StageTimings(total_ms=0.0))
     model_versions: dict[str, str] = {}
 
 
