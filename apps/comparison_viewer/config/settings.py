@@ -40,7 +40,7 @@ def load_settings() -> Settings:
     snapshots = {
         "yolo11m": os.environ.get("YOLO_CHECKPOINT_PATH", ""),
         "rfdetr_m_v3": os.environ.get("RFDETR_CHECKPOINT_PATH", ""),
-        "roboflow": os.environ.get("ROBOFLOW_MODEL_VERSION", ""),
+        "roboflow": os.environ.get("ROBOFLOW_MODEL_ID", ""),  # format: {project}/{version}
         "gemini_2_5_pro_det": os.environ.get("GEMINI_DETECTION_MODEL", ""),
         "parseq_base": os.environ.get("PARSEQ_CHECKPOINT", ""),
         "trocr_small": os.environ.get("TROCR_CHECKPOINT", ""),

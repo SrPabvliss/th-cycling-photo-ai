@@ -41,7 +41,7 @@ def test_taxonomy_ocr_codes() -> None:
 
 def test_taxonomy_color_codes() -> None:
     codes = [c for _, c in judgment_panel.TAXONOMY["color"]]
-    assert codes == ["match_exact", "match_approx", "wrong"]
+    assert codes == ["match_exact", "match_approx", "equivalent", "wrong"]
 
 
 # ---------------------------------------------------------------------------
@@ -73,6 +73,9 @@ class _FakeSt:
 
     def columns(self, n: int) -> list[_FakeColumn]:
         return [_FakeColumn(self) for _ in range(n)]
+
+    def checkbox(self, label: str, *, key: str, value: bool = False) -> bool:
+        return self.checkbox_overrides.get(key, value)
 
     def text_input(self, label: str, *, key: str, value: str = "") -> str:
         return self.text_input_overrides.get(key, value)
@@ -110,10 +113,11 @@ def test_save_appends_judgment_record(
     sid = "yolo11m"
 
     # Pre-check the "correct" checkbox + click save.
+    isha = image_sha[:12]
     fake_st.checkbox_overrides[
-        f"cb_correct_detection_{sid}_None_None"
+        f"cb_correct_detection_{sid}_None_None_{isha}"
     ] = True
-    fake_st.button_overrides[f"save_detection_{sid}_None_None"] = True
+    fake_st.button_overrides[f"save_detection_{sid}_None_None_{isha}"] = True
 
     judgment_panel.render(
         stage="detection",
@@ -149,13 +153,14 @@ def test_ocr_wrong_captures_correct_value(
     sid = "parseq_base"
     crop_sha = "c" * 64
 
+    isha = image_sha[:12]
     fake_st.checkbox_overrides[
-        f"cb_wrong_ocr_{sid}_{crop_sha}_None"
+        f"cb_wrong_ocr_{sid}_{crop_sha}_None_{isha}"
     ] = True
     fake_st.text_input_overrides[
-        f"correct_ocr_{sid}_{crop_sha}_None"
+        f"correct_ocr_{sid}_{crop_sha}_None_{isha}"
     ] = "42"
-    fake_st.button_overrides[f"save_ocr_{sid}_{crop_sha}_None"] = True
+    fake_st.button_overrides[f"save_ocr_{sid}_{crop_sha}_None_{isha}"] = True
 
     judgment_panel.render(
         stage="ocr",
@@ -186,11 +191,12 @@ def test_color_panel_persists_region(
     crop_sha = "d" * 64
     region = "helmet"
 
+    isha = image_sha[:12]
     fake_st.checkbox_overrides[
-        f"cb_match_exact_color_{sid}_{crop_sha}_{region}"
+        f"cb_match_exact_color_{sid}_{crop_sha}_{region}_{isha}"
     ] = True
     fake_st.button_overrides[
-        f"save_color_{sid}_{crop_sha}_{region}"
+        f"save_color_{sid}_{crop_sha}_{region}_{isha}"
     ] = True
 
     judgment_panel.render(

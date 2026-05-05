@@ -47,14 +47,17 @@ TAXONOMY: dict[str, list[tuple[str, str]]] = {
     "color": [
         ("✅", "match_exact"),
         ("⚠️", "match_approx"),
+        ("🔄", "equivalent"),  # different label but perceptually valid (gris↔plateado, blanco↔plateado)
         ("❌", "wrong"),
     ],
 }
 
 
 def _key(stage: str, system_id: str, parent_crop_sha: str | None,
-         region: str | None, suffix: str) -> str:
-    return f"{suffix}_{stage}_{system_id}_{parent_crop_sha}_{region}"
+         region: str | None, suffix: str, image_sha: str = "") -> str:
+    # image_sha included so detection panels (where parent_crop_sha and
+    # region are both None) don't share state across images.
+    return f"{suffix}_{stage}_{system_id}_{parent_crop_sha}_{region}_{image_sha[:12]}"
 
 
 def render(
@@ -78,16 +81,17 @@ def render(
         raise ValueError(f"unknown stage: {stage!r}")
 
     st.write("Juicio:")
-    state_key = _key(stage, system_id, parent_crop_sha, region, "judg")
+    state_key = _key(stage, system_id, parent_crop_sha, region, "judg", image_sha)
     selected: list[str] = st.session_state.setdefault(
         state_key, list(prior_codes or [])
     )
 
-    cols = st.columns(len(TAXONOMY[stage]))
-    for col, (sym, code) in zip(cols, TAXONOMY[stage]):
-        cb_key = _key(stage, system_id, parent_crop_sha, region, f"cb_{code}")
-        checked = col.checkbox(
-            sym, key=cb_key, value=code in selected,
+    for sym, code in TAXONOMY[stage]:
+        cb_key = _key(
+            stage, system_id, parent_crop_sha, region, f"cb_{code}", image_sha
+        )
+        checked = st.checkbox(
+            f"{sym} {code}", key=cb_key, value=code in selected,
         )
         if checked and code not in selected:
             selected.append(code)
@@ -99,18 +103,20 @@ def render(
         correct_value = st.text_input(
             "Valor correcto",
             value=prior_correct or "",
-            key=_key(stage, system_id, parent_crop_sha, region, "correct"),
+            key=_key(
+                stage, system_id, parent_crop_sha, region, "correct", image_sha
+            ),
         ) or None
 
     notes = st.text_input(
         "Notas",
         value=prior_notes or "",
-        key=_key(stage, system_id, parent_crop_sha, region, "notes"),
+        key=_key(stage, system_id, parent_crop_sha, region, "notes", image_sha),
     )
 
     if st.button(
         "Guardar juicio",
-        key=_key(stage, system_id, parent_crop_sha, region, "save"),
+        key=_key(stage, system_id, parent_crop_sha, region, "save", image_sha),
     ):
         record = JudgmentRecord(
             session_id=session_id,

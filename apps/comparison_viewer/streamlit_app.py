@@ -10,7 +10,15 @@ missing — that case is handled in ``main()`` with a friendly error.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+# Streamlit launches via `streamlit run <script>`, which sets sys.path[0] to
+# the script's directory rather than the repo root. Inject repo root so the
+# `apps.comparison_viewer.*` and `cycling_photo_ai.*` package imports resolve.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 import streamlit as st
 

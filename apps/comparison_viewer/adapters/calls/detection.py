@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -52,21 +53,23 @@ def _get_yolo() -> YoloDetector:
     if _yolo_singleton is None:
         # YoloDetector has no device kwarg; ultralytics auto-selects CPU on
         # macOS (no CUDA). M4 Pro forced CPU per RUN_CONDITIONS.md.
-        _yolo_singleton = YoloDetector()
+        # keep_all_classes=True so cyclist_with_bike is visible in the
+        # comparison UI. Production pipelines still filter to KEPT_CLASSES.
+        _yolo_singleton = YoloDetector(keep_all_classes=True)
     return _yolo_singleton
 
 
 def _get_rfdetr() -> RfdetrDetector:
     global _rfdetr_singleton
     if _rfdetr_singleton is None:
-        _rfdetr_singleton = RfdetrDetector()
+        _rfdetr_singleton = RfdetrDetector(keep_all_classes=True)
     return _rfdetr_singleton
 
 
 def _get_roboflow() -> RoboflowDetector:
     global _roboflow_singleton
     if _roboflow_singleton is None:
-        _roboflow_singleton = RoboflowDetector()
+        _roboflow_singleton = RoboflowDetector(filter_to_common_classes=False)
     return _roboflow_singleton
 
 
@@ -105,11 +108,21 @@ def _crop_png_sha256(img: Image.Image, det: Detection) -> tuple[str, dict]:
     return sha, {"x": px1, "y": py1, "w": px2 - px1, "h": py2 - py1}
 
 
+_MIN_CONFIDENCE = float(os.environ.get("DETECTION_MIN_CONFIDENCE", "0.35"))
+
+
 def _detections_to_bboxes(
     img: Image.Image, detections: list[Detection]
 ) -> list[dict]:
+    """Normalize detections to bbox dicts. Filters out detections below
+    DETECTION_MIN_CONFIDENCE (default 0.5) — RFDETR returns ALL decoder
+    queries via threshold=0.0 in the inner detector, so without filtering
+    here the overlay drowns the image in low-confidence boxes.
+    """
     bboxes: list[dict] = []
     for det in detections:
+        if float(det.confidence) < _MIN_CONFIDENCE:
+            continue
         sha, xywh = _crop_png_sha256(img, det)
         bboxes.append(
             {

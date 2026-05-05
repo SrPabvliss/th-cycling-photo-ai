@@ -30,6 +30,7 @@ from apps.comparison_viewer.components import judgment_panel
 from apps.comparison_viewer.components.crop_utils import (
     crop_sha256_of,
     extract_crop,
+    oriented_image_path,
 )
 from apps.comparison_viewer.components.live_progress import (
     format_status_line,
@@ -116,7 +117,7 @@ def _format_results_table(
 def render(image: dict, settings: Any) -> None:
     st.subheader("OCR — comparación 10 sistemas")
 
-    image_path = DATA_ROOT / "images" / image["filename"]
+    image_path = oriented_image_path(DATA_ROOT / "images" / image["filename"])
     available = _detectors_with_cache(image["sha256"])
     if not available:
         st.warning("Ejecuta Detection primero. Ningún detector tiene cache.")
@@ -129,10 +130,17 @@ def render(image: dict, settings: Any) -> None:
     ):
         default_idx = available.index(st.session_state["ocr_selected_detector"])
     selected_det = st.selectbox(
-        "Detector source",
+        "Detector source — ¿qué bboxes usar para recortar el dorsal?",
         available,
         index=default_idx,
         key="ocr_selected_detector",
+        help=(
+            "Cada detector produce bboxes ligeramente distintos (encuadre, "
+            "padding, posición). Elige uno para fijar el crop sobre el que "
+            "los 10 OCRs van a trabajar. La pestaña Color reusa esta misma "
+            "selección por defecto. Si quieres comparar detectores, repite "
+            "OCR cambiando esta opción."
+        ),
     )
 
     det_rec = cache.cache_lookup(
@@ -157,6 +165,8 @@ def render(image: dict, settings: Any) -> None:
     )
     crop_sha = crop_sha256_of(crop_img)
     st.image(crop_img, caption=f"crop_sha256: {crop_sha[:12]}…", width=300)
+
+    results_key = f"ocr_results_{crop_sha}"
 
     if st.button("Ejecutar OCR", key=f"run_ocr_{crop_sha}"):
         systems = list_systems_for_domain("ocr")
@@ -189,49 +199,48 @@ def render(image: dict, settings: Any) -> None:
         finally:
             thread.join(timeout=10.0)
 
-        if results:
-            st.markdown("---")
-            st.subheader("Resultados OCR")
+        # Persist so judgment-panel checkboxes don't wipe results on rerun.
+        st.session_state[results_key] = results
 
-            # Compute consensus and outliers (Task 5.3).
-            records_by_system = {
-                sid: rec.normalized_output["predicted_text"]
-                for sid, (_, rec) in results.items()
-                if rec is not None and rec.normalized_output.get("predicted_text")
-            }
-            majority_text, outlier_sids = majority_vote_text(records_by_system)
+    results = st.session_state.get(results_key, {})
+    if not results:
+        return
 
-            # Render consensus row if we have majority vote.
-            if majority_text:
-                st.markdown(f"**Consenso:** {majority_text}")
+    st.markdown("---")
+    st.subheader("Resultados OCR")
 
-            # Render results with outlier highlighting.
-            rows = _format_results_table(results, outlier_sids)
-            st.dataframe(rows, hide_index=True, use_container_width=True)
+    records_by_system = {
+        sid: rec.normalized_output["predicted_text"]
+        for sid, (_, rec) in results.items()
+        if rec is not None and rec.normalized_output.get("predicted_text")
+    }
+    majority_text, outlier_sids = majority_vote_text(records_by_system)
 
-            # Per-system judgment panels.
-            session_id = st.session_state.get("session_id", "default")
-            priors = load_judgments_for_image(
-                _settings.JUDGMENTS_ROOT, image["sha256"]
+    if majority_text:
+        st.markdown(f"**Consenso:** {majority_text}")
+
+    rows = _format_results_table(results, outlier_sids)
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+
+    session_id = st.session_state.get("session_id", "default")
+    priors = load_judgments_for_image(_settings.JUDGMENTS_ROOT, image["sha256"])
+    prior_by_key = {
+        (p.stage, p.system_id, p.parent_crop_sha256, p.region): p for p in priors
+    }
+    for sid in sorted(results.keys()):
+        kind, rec = results[sid]
+        lectura = "—"
+        if rec is not None:
+            lectura = rec.normalized_output.get("predicted_text") or "—"
+        with st.expander(f"Juicio — {sid} · {lectura}", expanded=False):
+            prior = prior_by_key.get(("ocr", sid, crop_sha, None))
+            judgment_panel.render(
+                stage="ocr",
+                image_sha=image["sha256"],
+                system_id=sid,
+                session_id=session_id,
+                parent_crop_sha=crop_sha,
+                prior_codes=prior.judgment_codes if prior else None,
+                prior_correct=prior.correct_value if prior else None,
+                prior_notes=prior.notes if prior else None,
             )
-            prior_by_key = {
-                (p.stage, p.system_id, p.parent_crop_sha256, p.region): p
-                for p in priors
-            }
-            for sid in sorted(results.keys()):
-                kind, rec = results[sid]
-                lectura = "—"
-                if rec is not None:
-                    lectura = rec.normalized_output.get("predicted_text") or "—"
-                with st.expander(f"Juicio — {sid} · {lectura}", expanded=False):
-                    prior = prior_by_key.get(("ocr", sid, crop_sha, None))
-                    judgment_panel.render(
-                        stage="ocr",
-                        image_sha=image["sha256"],
-                        system_id=sid,
-                        session_id=session_id,
-                        parent_crop_sha=crop_sha,
-                        prior_codes=prior.judgment_codes if prior else None,
-                        prior_correct=prior.correct_value if prior else None,
-                        prior_notes=prior.notes if prior else None,
-                    )
