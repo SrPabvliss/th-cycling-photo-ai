@@ -20,7 +20,8 @@ bicicleta"), no por margen incremental.
 
 **Trade-off explícito y aceptado (no oculto):** Gemini es ×7.6 más lento que
 Manual en p95 (2158 ms vs 285 ms) y cuesta ~$0.0003/crop vs $0. Aceptamos el
-trade-off porque la calidad que ofrece (82.1% exact+eq vs 11.0% del manual)
+trade-off porque la calidad que ofrece (judgment-level 82.5% vs 25.5%
+exact+eq · image-level majority 86.6% vs 16.4% del manual)
 no la igualamos con la implementación manual dentro del scope de la tesis —
 el problema es de dominio (segmentación semántica), no de tuning. El pipeline
 tolera la latencia porque la revisión es humana / no realtime, y el techo de
@@ -70,20 +71,32 @@ PARSeq estadísticamente superior a 5 sistemas (Vision, Haiku, TrOCR, Gemini-3-P
 
 ### Color — match exact + equivalent (focal-color)
 
-| Sistema | exact+eq | CI 95% | Latency p50 | Cost total |
-|---|---|---|---|---|
-| **gemini_2_5_flash_color** | **86.6%** | [77.6, 94.0] | 1859ms | $0.05 |
-| manual_kmeans | 19.4% | [10.4, 28.4] | 85ms | $0.00 |
+**Image-level majority (≥2/3 regiones exact+eq) — headline:**
 
-**McNemar: gemini+=45, manual+=0, p<0.000001 ***  ** — diferencia masiva en 67 imgs.
-Gemini gana en 45/67 imágenes que manual erra; manual nunca gana en una imagen
-que Gemini erra. Hammer estadístico.
+| Sistema | majority | CI 95% Wilson | Latency p50 | Cost total |
+|---|---|---|---|---|
+| **gemini_2_5_flash_color** | **86.6%** (58/67) | [76.4, 92.8] | 1859ms | $0.05 |
+| manual_kmeans | 16.4% (11/67) | [9.4, 27.0] | 85ms | $0.00 |
+
+**Judgment-level (n=371: 188 manual + 183 gemini, dedup parquet):**
+
+| Sistema | exact+eq | any-correct (exact+eq+approx) | wrong |
+|---|---|---|---|
+| gemini_2_5_flash_color | 82.5% (151/183) | 98.4% (180/183) | 2.2% (4/183) |
+| manual_kmeans | 25.5% (48/188) | 78.7% (148/188) | 21.3% (40/188) |
+
+**McNemar pareado image-level (all-regions exact+eq, n=67):**
+- gem-only: 36 imgs · man-only: 2 imgs · both: 6 · neither: 23
+- **p < 1e-7** ⭐⭐⭐ — Gemini gana 36 imágenes donde manual erra; manual
+  gana en 2 donde Gemini erra. Diferencia masiva, no atribuible a ruido.
 
 **ADR-019 §7 obsoleto.** La decisión "hybrid factory · manual default + Gemini
 opt-in" se basaba en el cache automatizado Run 19 cuya métrica `any-match`
 contra labeler GT estricto penalizaba el focal-color de Gemini. Eval manual
-humana (n=286 juicios color, 67 imágenes) invierte la decisión: Gemini 86.6%
-exact+equivalent vs manual 19.4%. Manual desconectado del pipeline
+humana canónica (parquet consolidado de 8 sesiones, 67 imágenes,
+n=371 juicios color) invierte la decisión: image-level majority Gemini
+86.6% (58/67) vs Manual 16.4% (11/67); judgment-level exact+eq Gemini
+82.5% vs Manual 25.5%; McNemar p<1e-7. Manual desconectado del pipeline
 (`AVAILABLE_COLORS = ("gemini", "none")`); código manual permanece en repo
 como referencia académica pero no se expone como opción runtime.
 
@@ -121,7 +134,7 @@ para diseño de revisión humana — la mayoría de sistemas no auto-rechaza.
 |---|---|---|---|
 | Detection | YOLO11m | YOLO11m (audit_adr015 prod recall +10.5pp vs RFDETR) | ✅ |
 | OCR | PARSeq | PARSeq 4-phase EM@80=98.7% (Run 14) | ✅ |
-| Color | **Gemini gana, manual desconectado** | Run 19-20 (cache auto) decía hybrid; eval manual lo invierte | ⚠️ revisado |
+| Color | **Gemini gana, manual desconectado** | Run 19-20 (cache auto) decía hybrid; eval manual (parquet n=371, 67 imgs) lo invierte: Gemini 86.6% majority / 82.5% judgment exact+eq vs Manual 16.4% / 25.5%, McNemar p<1e-7 | ⚠️ revisado |
 
 Detection y OCR concordantes con épicas canónicas. Color: la eval manual
 del mini-app **invalida** la decisión §7 del ADR-019 — métrica `any-match`

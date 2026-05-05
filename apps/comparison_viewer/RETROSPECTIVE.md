@@ -6,9 +6,9 @@ metrics captured in `experiments/exploratorio/consolidated/*.parquet`.
 
 Each domain section is filled in as the evaluator finishes its judgment pass.
 
-## Detection (TTV-118) — sesión 2026-05-03 → 2026-05-04 · imágenes 1-20
+## Detection (TTV-118) — sesión 2026-05-03 → 2026-05-04 · 67 imágenes (eval completa)
 
-**Verdict ranking (subjetivo, 20/67 imágenes):**
+**Verdict ranking (subjetivo, 67/67 imágenes):**
 
 1. **YOLO11m** — gana en producción.
 2. **Roboflow** (RF-DETR servido por Roboflow Cloud) — segundo, bueno pero servicio + falla en sujetos lejanos.
@@ -56,18 +56,37 @@ Con YOLO como source, los gaps de `cyclist_clothes` no son problema crítico —
 las regiones color (helmet, bicycle) absorben el área cuando el sujeto está
 muy compactado. La pipeline color sobrevive sin re-entrenar.
 
-### Pendiente: validar contra datos
+### Validación contra datos (parquet 67 imgs, post-eval completa)
 
-- Métricas operacionales (latency p50/p95, cost, consistencia retest) en
-  `experiments/exploratorio/consolidated/operational.parquet` — confirmar que
-  ranking subjetivo coincide.
-- mAP@0.5 original del epic TTV-118: RF-DETR-M = 0.954 vs YOLO11m = ?
-  La divergencia mAP-vs-utilidad-percibida es esperable: mAP mide IoU contra GT,
-  no calidad de crop para downstream OCR/color.
+`experiments/exploratorio/consolidated/judgments.parquet` (n=264 juicios
+detection, 67 imgs, 4 sistemas):
+
+| Sistema | accuracy | judgments | latency p50 |
+|---|---|---|---|
+| rfdetr_m_v3 | 100.0% (66/66) | n=66 | 737 ms |
+| **yolo11m** | 92.4% (61/66) | n=66 | **406 ms** ⭐ |
+| roboflow | 92.4% (61/66) | n=66 | 2082 ms |
+| gemini_2_5_pro | 68.2% (45/66) | n=66 | 8583 ms |
+
+**Por qué el ranking subjetivo pone YOLO 1ro pese a rfdetr 100%:** el filtro
+de confianza > 0.35 aplicado en la UI del mini-app hace que solo lleguen las
+detecciones de alta confianza al evaluador. Las low-confidence-misses de
+RF-DETR no entran como `missed` (no aparece bbox a juzgar) — su 100% es
+artifact, no señal. El criterio operacional (latency × 1.8 más lenta,
+crops menos centrados, confianzas bajas observadas en juicios) favorece
+YOLO11m, alineado con audit_adr015 canónico (prod recall@thr0.70 86.9% vs
+RF-DETR 76.4%).
+
+mAP@0.5 epic TTV-118 (val v3_cleaned): YOLO11m 0.941 / RF-DETR-M 0.954.
+La divergencia mAP-vs-utilidad-percibida es esperable: mAP mide IoU contra
+GT, no calidad de crop para downstream OCR/color.
+
+**Conclusión validación: ranking subjetivo se sostiene** una vez aplicado
+el ajuste por filtro-de-confianza en el dato del mini-app.
 
 ---
 
-## OCR (TTV-119) — sesión 2026-05-04 · imágenes 1-20
+## OCR (TTV-119) — sesión 2026-05-04 · 67 imágenes (eval completa)
 
 **Verdict: PARSeq gana. Pipeline = YOLO + PARSeq + revisión humana sobre placas.**
 
@@ -114,19 +133,36 @@ Detalle observado: cuando un humano sin contexto vería "94", el modelo también
 
 ### Cross-check con datos canónicos
 
-`experiments/EXPERIMENT_LOG_OCR.md` Runs 14-16 (test locked 99 imgs):
+**Mini-app parquet 67 imgs (n=655 juicios OCR, judgment-level):**
+
+| Sistema | acc | n | latency p50 |
+|---|---|---|---|
+| **parseq_base** | **92.4%** (61/66) | 66 | **33 ms** ⭐ |
+| gpt_5 | 92.4% (61/66) | 66 | 1990 ms |
+| gpt_4o_mini | 92.1% (58/63) | 63 | 1307 ms |
+| claude_opus_4_7 | 87.9% (58/66) | 66 | 1691 ms |
+| gemini_2_5_flash | 84.8% (56/66) | 66 | 1492 ms |
+| aws_rekognition | 77.3% (51/66) | 66 | 935 ms |
+| gemini_3_pro | 75.8% (50/66) | 66 | 3081 ms |
+| trocr_small | 72.7% (48/66) | 66 | 87 ms |
+| claude_haiku_4_5 | 69.2% (45/65) | 65 | 890 ms |
+| google_vision | 67.7% (44/65) | 65 | 347 ms |
+
+**Test set canónico** (`experiments/EXPERIMENT_LOG_OCR.md` Runs 14-16, 99 imgs):
 - PARSeq 4-phase: EM@100=90.9%, **EM@80=98.7%** (target era 95%, supera +3.7pp)
 - TrOCR 4-phase: EM@100=76.8%, EM@80=88.6%  → PARSeq +10.1pp EM@80%
-- Cloud VLMs: NO tienen benchmark en test set canónico. Tu eval mini-app es
-  la primera comparación sistemática contra dataset exploratorio.
-- Smoke Run 16: GPT-5 frontera **alucina** "100"→"108". Confirma tu observación.
+- Cloud VLMs no benchmarked en test set canónico — la eval mini-app es la
+  primera comparación sistemática contra dataset exploratorio.
+- Smoke Run 16: GPT-5 frontera **alucina** "100"→"108". Confirma observación
+  del evaluador (los Gemini/GPT/Claude alucinan en domino-edge cases).
 
-**Veredicto numérico coincide con percepción**: PARSeq es el ganador objetivo +
-subjetivo. Latencia 24ms (PARSeq) vs 1000-3800ms (cloud) refuerza la decisión.
+**Veredicto numérico coincide con percepción**: PARSeq empata con GPT-5 y
+GPT-4o-mini en el top tier (estadísticamente indistinguibles a n=66 por
+McNemar) pero gana operacionalmente: 60× más rápido, $0, offline.
 
 ---
 
-## Color (TTV-COLOR) — sesión 2026-05-04 · imágenes 1-20
+## Color (TTV-COLOR) — sesión 2026-05-04 · 67 imágenes (eval completa)
 
 **Verdict: Gemini 2.5 Flash gana, no por margen sino por arquitectura.**
 
@@ -186,12 +222,22 @@ del cache automatizado Run 19 (sobre la que descansaba §7) era
 estructuralmente insensible al modo de fallo real: manual emite
 black/gray como candidato casi siempre, y los GT incluyen achromáticos
 co-ocurrentes (ruedas, sombras), por lo que `any-match` capaba en ~0.92
-sin captar si la estrategia identificó el color focal. Eval humana
-(n=286) muestra Gemini 82.1% exact / 97.8% exact+approx vs Manual
-11.0% / 72.0% (McNemar p<0.000001). **Manual desconectado del
-pipeline** (`AVAILABLE_COLORS = ("gemini", "none")`); código manual
-permanece en repo como referencia académica. Ver Run 22 en
-`experiments/EXPERIMENT_LOG_COLOR.md`.
+sin captar si la estrategia identificó el color focal.
+
+**Eval humana canónica** (parquet consolidado de 8 sesiones JSONL,
+67 imgs, n=371 juicios color: 188 manual + 183 gemini):
+
+- Judgment-level exact+eq: Gemini **82.5%** vs Manual **25.5%**.
+- Judgment-level any-correct (exact+eq+approx): Gemini **98.4%** vs
+  Manual **78.7%**.
+- Image-level majority (≥2/3 regiones exact+eq) — métrica headline:
+  Gemini **86.6%** (58/67) vs Manual **16.4%** (11/67).
+- McNemar pareado image-level (all-regions exact+eq): gem-only 36,
+  man-only 2, both 6, neither 23, **p < 1e-7**.
+
+**Manual desconectado del pipeline** (`AVAILABLE_COLORS = ("gemini",
+"none")`); código manual permanece en repo como referencia académica.
+Ver Run 22 en `experiments/EXPERIMENT_LOG_COLOR.md`.
 
 ### Manual `manual_kmeans` colapsa a achromático
 
@@ -220,6 +266,7 @@ segmentación semántica colapsan sistemáticamente a achromático).
 en p95 (2158 ms vs 285 ms) y ~$0.0003/crop (vs $0 del manual). Aparece en
 todas las tablas comparativas — no se omite ni se minimiza. Lo aceptamos
 porque es el costo de obtener un resultado que el manual no entrega
-(82.1% vs 11.0% exact+eq) y que no podemos igualar dentro del scope. La
+(judgment-level 82.5% vs 25.5% exact+eq · image-level majority 86.6% vs
+16.4%) y que no podemos igualar dentro del scope. La
 revisión humana del pipeline absorbe la latencia (no es ruta crítica
 realtime) y el costo escala con volumen de imágenes acotado.
