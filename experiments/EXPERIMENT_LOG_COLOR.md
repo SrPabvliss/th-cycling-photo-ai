@@ -1136,27 +1136,47 @@ ground truth.
   `GeminiColorStrategy`, gemini-2.5-flash, no thinking, JSON schema enum).
 - Per-image, per-region judgments with codes
   `match_exact | match_approx | equivalent | wrong | bad_crop`.
-- Persistence: `judgments/session_2026-05-04_15-56-20.jsonl` (954 lines,
-  286 color judgments across helmet / cyclist_clothes / bicycle).
+- Persistence: 8 JSONL session files in `judgments/` (2026-05-03 →
+  2026-05-04). Consolidated with last-write-wins dedup into
+  `experiments/exploratorio/consolidated/judgments.parquet` —
+  **canonical source for the numbers below** (1290 total judgment rows;
+  371 color judgments: 188 manual + 183 gemini).
 
-**Headline (n=286 color judgments, 67 images):**
+**Headline (judgment-level, n=371 color judgments, 67 images):**
 
-| System | exact+equivalent | exact+approx (any-correct) | wrong | latency p50 |
-|---|---|---|---|---|
-| manual_kmeans | **11.0%** | 72.0% | 27.4% | 85 ms |
-| **gemini_2_5_flash_color** | **82.1%** | **97.8%** | 2.1% | 1859 ms |
-
-**Per-system breakdown:**
-
-| System | n | match_exact | match_approx | wrong | equivalent |
+| System | n | exact+equivalent | any-correct (exact+eq+approx) | wrong | latency p50 |
 |---|---|---|---|---|---|
-| manual_kmeans | 146 | 12 | 89 | 40 | 4 |
-| gemini_2_5_flash_color | 140 | 114 | 22 | 3 | 1 |
+| manual_kmeans | 188 | **25.5%** | 78.7% | 21.3% | 85 ms |
+| **gemini_2_5_flash_color** | 183 | **82.5%** | **98.4%** | 2.2% | 1859 ms |
 
-**Statistical test (image-level paired McNemar, focal-color exact+equivalent):**
-- gemini wins: 45 images
-- manual wins: 0 images
-- p < 0.000001 ⭐⭐⭐
+**Per-system code breakdown (judgment-level):**
+
+| System | match_exact | match_approx | equivalent | wrong |
+|---|---|---|---|---|
+| manual_kmeans | 30 + 14 cooc | 100 + 2 cooc | 13 + 3 only | 40 |
+| gemini_2_5_flash_color | 137 + 12 cooc | 28 + 2 cooc | 12 + 1 only | 4 |
+
+(co-occurrence rows are judgments tagged with both codes; reported in the
+"+N cooc" column to disambiguate from the strict single-code count.)
+
+**Image-level aggregations (n=67 images):**
+
+| Aggregation | Manual | Gemini |
+|---|---|---|
+| all judged regions exact+eq | 11.9% (8/67) | 62.7% (42/67) |
+| **majority (≥2/3 regions) exact+eq** | **16.4% (11/67)** | **86.6% (58/67)** |
+| any region exact+eq | 49.3% (33/67) | 95.5% (64/67) |
+
+The "majority" row is the headline number reported in
+`apps/comparison_viewer/SESSION_REPORT.md` and is the most operationally
+meaningful: an image where ≥2 of {helmet, clothes, bicycle} are
+exact+equivalent is usable for downstream search by color.
+
+**Statistical test (image-level paired McNemar, all-regions-exact+eq):**
+- gemini-only wins: 36 images
+- manual-only wins: 2 images
+- both correct: 6 · neither: 23
+- McNemar χ² ≫ critical · p < 1e-7 ⭐⭐⭐
 
 **Why Run 19's `any-match 0.924` was misleading:**
 
@@ -1231,7 +1251,9 @@ evaluation is necessary in domains with ambiguous referents
 - OCR: PARSeq 4-phase (TTV-119)
 - Color: **`GeminiColorStrategy`** (gemini-2.5-flash, no thinking,
   JSON schema enum, 15-color palette ADR-018).
-  - Quality: exact+equivalent 82.1% in manual eval (n=286).
+  - Quality: judgment-level exact+equivalent 82.5% (n=183, parquet
+    consolidated); image-level majority (≥2/3 regions exact+eq)
+    86.6% (58/67 imgs).
   - Latency: p50 1859 ms / p95 ~2.2 s. **Accepted trade-off** vs
     Manual p95 285 ms (×7.6 slower).
   - Cost: ~$0.0003 per crop. **Accepted trade-off** vs Manual $0.
@@ -1257,7 +1279,7 @@ evaluation is necessary in domains with ambiguous referents
 | 19 | Gemini Flash A/B (auto) | 0.525 | 0.889 | hybrid (qualitative trade-off) |
 | 20 | + CoT 1024 | 0.383 | n/a | REJECT — regresses hard subset |
 | 21 | S6 FastAPI integration | n/a | n/a | factory wired (manual default) |
-| **22** | **Manual eval override** | **Gemini 0.821 / Manual 0.110** | **Gemini 0.978 / Manual 0.720** | **Gemini-only · manual disconnected · ADR-019 §7 SUPERSEDED** |
+| **22** | **Manual eval override (parquet, n=371 jdg / 67 imgs)** | **Gemini 0.825 / Manual 0.255** (judgment-level exact+eq) · **Gemini 0.866 / Manual 0.164** (image-level majority) | **Gemini 0.984 / Manual 0.787** (any-correct) | **Gemini-only · manual disconnected · ADR-019 §7 SUPERSEDED** |
 
 **Production-ready stacks (post Run 22):**
 ```
