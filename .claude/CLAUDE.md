@@ -6,7 +6,7 @@ AI pipeline for automated cycling photography: object detection + bib number OCR
 Part of thesis comparing 3 strategies: GPT-4V zero-shot | Roboflow API | **This model**.
 
 **Epics:**
-- TTV-118 — Object Detection (completed: RF-DETR-M, mAP@0.5 = 0.954)
+- TTV-118 — Object Detection (completed: **YOLO11m wins** post-v3_cleaned. Val mAP@0.5=0.941, prod recall@thr0.70=86.9% vs RF-DETR-M 76.4%. RF-DETR-M kept as academic ablation baseline. See `experiments/audit_adr015/AUDIT_LOG.md`.)
 - TTV-119 — Bib Number OCR Recognition (in progress)
 
 ## Architecture
@@ -110,7 +110,8 @@ Domains don't import from each other. `pipeline/` is the thin orchestration laye
 ### Detection (TTV-118)
 - **Headline:** Macro-F1 image-level (Level C comparison)
 - **Detection:** mAP@0.5:0.95 via pycocotools (Level A)
-- **Result:** RF-DETR-M mAP@0.5 = 0.954, 6 classes
+- **Result (canonical, post-v3_cleaned 5 classes):** YOLO11m val mAP@0.5=0.941, mAP@0.5:95=0.768; competidor_number AP@0.5:95=0.637 (+8.5pp vs RF-DETR-M). Prod recall@thr0.70: YOLO 86.9% > RF-DETR 76.4%. **Deploy YOLO11m.**
+- **Earlier number** "RF-DETR-M mAP@0.5=0.954" applies to pre-cleaning dataset and is superseded.
 
 ### OCR (TTV-119)
 - **Headline:** Exact Match @ 80% Coverage (EM@80%)
