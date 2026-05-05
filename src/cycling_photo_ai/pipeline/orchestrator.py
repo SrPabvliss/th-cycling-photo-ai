@@ -32,7 +32,8 @@ class PipelineResult:
     detection_ms: float = 0.0
     ocr_ms: float = 0.0
     color_ms: float = 0.0
-    errors: list[str] = field(default_factory=list)
+    stage_results: list[dict] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)  # deprecated — use stage_results
 
 
 def _crop_with_padding(
@@ -92,6 +93,7 @@ class PipelineOrchestrator:
         errors: list[str] = []
         ocr_ms_total = 0.0
         color_ms_total = 0.0
+        stage_results: list[dict] = []
 
         # Step 1 — Detection
         det_start = time.perf_counter()
@@ -101,6 +103,17 @@ class PipelineOrchestrator:
             d for d in raw_detections
             if d.confidence >= self._confidence_threshold
         ]
+        det_notes: list[str] = []
+        if not detections:
+            det_notes.append("no_detections_above_threshold")
+        stage_results.append({
+            "stage": "detection",
+            "status": "ok",
+            "items_processed": 1,
+            "items_succeeded": 1,
+            "items_failed": 0,
+            "notes": det_notes,
+        })
         det_dicts = [
             {
                 "class_name": d.class_name,
@@ -128,18 +141,56 @@ class PipelineOrchestrator:
             else:
                 img_height, img_width = image.shape[:2]
 
+        if image is None:
+            # Both OCR and color are unable to run — emit failed stage results
+            ocr_target_count = len([d for d in detections if d.class_name == "competidor_number"])
+            stage_results.append({
+                "stage": "ocr",
+                "status": "skipped" if self._bib_reader is None else "failed",
+                "items_processed": 0,
+                "items_succeeded": 0,
+                "items_failed": 0,
+                "notes": ["image_load_failed"] if self._bib_reader is not None else ["ocr_disabled"],
+            })
+            color_target_count = len([d for d in detections if d.class_name in COLOR_REGIONS])
+            stage_results.append({
+                "stage": "color",
+                "status": "skipped" if self._color_strategy is None else "failed",
+                "items_processed": 0,
+                "items_succeeded": 0,
+                "items_failed": 0,
+                "notes": ["image_load_failed"] if self._color_strategy is not None else ["strategy_disabled"],
+            })
+
         if image is not None:
             # Step 2 — OCR for competidor_number bboxes
+            ocr_targets = [d for d in detections if d.class_name == "competidor_number"]
+            ocr_processed = 0
+            ocr_succeeded = 0
+            ocr_failed = 0
+            ocr_abstained = 0
+            ocr_unmatched = 0
+            ocr_notes: list[str] = []
             if self._bib_reader is not None:
-                for det in detections:
-                    if det.class_name != "competidor_number":
-                        continue
+                for det in ocr_targets:
+                    ocr_processed += 1
                     crop_data = _crop_with_padding(image, det.bbox, self._padding_ratio)
                     if crop_data is None:
+                        ocr_failed += 1
+                        ocr_notes.append(f"crop_failed:competidor_number")
+                        errors.append(f"ocr crop failed for bbox {det.bbox}")
                         continue
                     crop, _abs = crop_data
                     ocr_t0 = time.perf_counter()
-                    reading = self._bib_reader.read(crop)
+                    try:
+                        reading = self._bib_reader.read(crop)
+                    except Exception as e:
+                        ocr_item_ms = (time.perf_counter() - ocr_t0) * 1000
+                        ocr_ms_total += ocr_item_ms
+                        ocr_failed += 1
+                        ocr_notes.append(f"reader_exception:{e}")
+                        errors.append(f"ocr({det.bbox}): {e}")
+                        continue
                     ocr_item_ms = (time.perf_counter() - ocr_t0) * 1000
                     ocr_ms_total += ocr_item_ms
                     if startlist and reading.status != "abstained":
@@ -175,16 +226,54 @@ class PipelineOrchestrator:
                         "raw_ocr_text": reading.raw_text,
                         "processing_ms": round(ocr_item_ms, 2),
                     })
+                    ocr_succeeded += 1
+                    if reading.status == "abstained":
+                        ocr_abstained += 1
+                    elif reading.status == "unmatched":
+                        ocr_unmatched += 1
+
+            # Finalize OCR stage result
+            if self._bib_reader is None:
+                ocr_status = "skipped"
+                ocr_notes.append("ocr_disabled")
+            elif ocr_processed == 0:
+                ocr_status = "skipped"
+                ocr_notes.append("no_competidor_number_detected")
+            elif ocr_failed == 0:
+                ocr_status = "ok"
+            elif ocr_succeeded == 0:
+                ocr_status = "failed"
+            else:
+                ocr_status = "partial"
+            if ocr_abstained:
+                ocr_notes.append(f"abstained:{ocr_abstained}")
+            if ocr_unmatched:
+                ocr_notes.append(f"unmatched:{ocr_unmatched}")
+            stage_results.append({
+                "stage": "ocr",
+                "status": ocr_status,
+                "items_processed": ocr_processed,
+                "items_succeeded": ocr_succeeded,
+                "items_failed": ocr_failed,
+                "notes": ocr_notes,
+            })
 
             # Step 3 — Color analysis for helmet / cyclist_clothes / bicycle
+            color_targets = [d for d in detections if d.class_name in COLOR_REGIONS]
+            color_processed = 0
+            color_succeeded = 0
+            color_failed = 0
+            color_notes: list[str] = []
             if self._color_strategy is not None:
                 import cv2
 
-                for det in detections:
-                    if det.class_name not in COLOR_REGIONS:
-                        continue
+                for det in color_targets:
+                    color_processed += 1
                     crop_data = _crop_with_padding(image, det.bbox, COLOR_PADDING_RATIO)
                     if crop_data is None:
+                        color_failed += 1
+                        color_notes.append(f"crop_failed:{det.class_name}")
+                        errors.append(f"color crop failed for {det.class_name} bbox {det.bbox}")
                         continue
                     crop, _abs = crop_data
                     # No segmentation mask available at inference (detectors
@@ -195,6 +284,8 @@ class PipelineOrchestrator:
                     try:
                         cresult = self._color_strategy.analyze(rgba)
                     except Exception as e:
+                        color_failed += 1
+                        color_notes.append(f"strategy_exception:{det.class_name}:{e}")
                         errors.append(f"color({det.class_name}): {e}")
                         continue
                     color_ms_total += cresult.metadata.processing_ms
@@ -207,6 +298,29 @@ class PipelineOrchestrator:
                         "strategy": cresult.metadata.strategy,
                         "processing_ms": cresult.metadata.processing_ms,
                     })
+                    color_succeeded += 1
+
+            # Finalize color stage result
+            if self._color_strategy is None:
+                color_status = "skipped"
+                color_notes.append("strategy_disabled")
+            elif color_processed == 0:
+                color_status = "skipped"
+                color_notes.append("no_color_regions_detected")
+            elif color_failed == 0:
+                color_status = "ok"
+            elif color_succeeded == 0:
+                color_status = "failed"
+            else:
+                color_status = "partial"
+            stage_results.append({
+                "stage": "color",
+                "status": color_status,
+                "items_processed": color_processed,
+                "items_succeeded": color_succeeded,
+                "items_failed": color_failed,
+                "notes": color_notes,
+            })
 
         elapsed_ms = (time.perf_counter() - start) * 1000
 
@@ -220,5 +334,6 @@ class PipelineOrchestrator:
             detection_ms=round(detection_ms, 2),
             ocr_ms=round(ocr_ms_total, 2),
             color_ms=round(color_ms_total, 2),
+            stage_results=stage_results,
             errors=errors,
         )

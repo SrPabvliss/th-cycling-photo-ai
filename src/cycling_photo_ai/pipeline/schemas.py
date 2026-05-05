@@ -53,6 +53,26 @@ class ColorAnalysisItem(BaseModel):
     processing_ms: int = 0
 
 
+class StageResult(BaseModel):
+    """Per-stage execution outcome for one pipeline run.
+
+    Reported per stage (detection, ocr, color) to distinguish:
+    - structurally normal partial outcomes ("no plate visible" → status=skipped)
+    - real failures ("OCR raised exception" → status=partial/failed)
+    - successful runs ("all crops processed" → status=ok)
+
+    Backend persists this for tesis observability ("% of photos where plate
+    detected but OCR could not read", "% where color stage crashed", etc.).
+    """
+
+    stage: str = Field(description="detection | ocr | color")
+    status: str = Field(description="ok | partial | skipped | failed")
+    items_processed: int = Field(description="Number of input items the stage attempted (e.g. competidor_number bboxes for OCR)")
+    items_succeeded: int = Field(description="Items that produced a usable result")
+    items_failed: int = Field(description="Items that raised an exception or hit a hard error")
+    notes: list[str] = Field(default_factory=list, description="Snake_case codes describing skip reasons / failures / informative counters (e.g. 'no_competidor_number_detected', 'reader_exception:<msg>', 'abstained:2')")
+
+
 class StageTimings(BaseModel):
     """Per-stage wall-clock breakdown of pipeline processing.
 
@@ -79,6 +99,7 @@ class PipelineResponse(BaseModel):
     image_height: int
     processing_ms: float
     timings: StageTimings = Field(default_factory=lambda: StageTimings(total_ms=0.0))
+    stage_results: list[StageResult] = Field(default_factory=list, description="Per-stage execution outcomes — replacement for the legacy `errors` field below")
     model_versions: dict[str, str] = {}
 
 

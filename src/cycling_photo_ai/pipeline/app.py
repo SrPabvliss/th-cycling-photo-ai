@@ -34,6 +34,7 @@ from cycling_photo_ai.pipeline.schemas import (
     ModelsResponse,
     PipelineRequest,
     PipelineResponse,
+    StageResult,
     StageTimings,
 )
 
@@ -206,6 +207,7 @@ async def pipeline(
             ocr_ms=result.ocr_ms,
             color_ms=result.color_ms,
         ),
+        stage_results=[StageResult(**sr) for sr in result.stage_results],
         model_versions={"detection": detector, "ocr": ocr, "color": color},
     )
 
