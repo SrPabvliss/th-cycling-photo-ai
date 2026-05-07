@@ -31,6 +31,11 @@ class GoogleVisionBibReader:
         self._client = None
         self._language_hints = language_hints or ["en", "es"]
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
+        # Mini-app introspection (TTV-MINIAPP). google-cloud-vision does not
+        # surface a request id on AnnotateImageResponse — it lives only in
+        # the underlying gRPC trailing metadata which the high-level client
+        # does not expose. Keep field as None and document the gap.
+        self._last_request_id: str | None = None
 
     def _load(self) -> None:
         from google.cloud import vision
@@ -66,6 +71,16 @@ class GoogleVisionBibReader:
             image_context=ctx,
         )
         response = self._client.annotate_image(request=request)
+
+        # Try to extract a request id if surfaced; google-cloud-vision typically
+        # does not. Documented gap — leaves attribute as None when missing.
+        try:
+            inner_pb = getattr(response, "_pb", None)
+            self._last_request_id = (
+                getattr(inner_pb, "request_id", None) if inner_pb is not None else None
+            ) or None
+        except Exception:
+            self._last_request_id = None
 
         if response.error.message:
             return BibReading(

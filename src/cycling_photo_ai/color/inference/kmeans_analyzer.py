@@ -22,10 +22,13 @@ from .palette_mapping import assign_palette_name, collapse_same_name
 from .pipeline_stages import (
     bgr_to_lab,
     cluster_kmeans,
+    compute_centrality_weights,
     filter_and_truncate,
     merge_close_centroids,
+    merge_small_chromatic,
     partition_lab_pixels,
     subsample,
+    subsample_with_indices,
     validate_crop,
 )
 from .ports import (
@@ -138,10 +141,20 @@ class KMeansAnalyzer(IColorAnalyzer):
             # Stage 2
             lab = bgr_to_lab(crop_bgr, apply_gray_world=cfg.apply_gray_world)
 
+            # Build per-pixel centrality weights BEFORE flatten so we can
+            # carry them through with the same masking. ADR-018 §6.5.
+            h_orig, w_orig = lab.shape[:2]
+            weights_full: np.ndarray | None = None
+            if cfg.centrality_enabled:
+                weights_full = compute_centrality_weights(
+                    h_orig, w_orig, sigma=cfg.centrality_sigma,
+                )
+
             # Apply foreground mask BEFORE partition: drop background pixels
             # entirely so they don't pollute either chromatic or achromatic
             # buckets. This addresses the labeler-vs-algorithm mismatch
             # (Pablo labels the object, algorithm measures whole crop).
+            weights_flat: np.ndarray | None = None
             if mask is not None:
                 if mask.shape[:2] != lab.shape[:2]:
                     mask = cv2.resize(
@@ -151,9 +164,14 @@ class KMeansAnalyzer(IColorAnalyzer):
                 fg = mask > 0
                 if fg.sum() < cfg.min_total_px:
                     # Mask too tight → fall back to full crop
-                    pass
+                    if weights_full is not None:
+                        weights_flat = weights_full.reshape(-1)
                 else:
                     lab = lab[fg].reshape(-1, 1, 3)
+                    if weights_full is not None:
+                        weights_flat = weights_full[fg]
+            elif weights_full is not None:
+                weights_flat = weights_full.reshape(-1)
 
             # Stage 3 — partition (chromatic + achromatic buckets)
             partition = partition_lab_pixels(
@@ -190,8 +208,28 @@ class KMeansAnalyzer(IColorAnalyzer):
 
             # ---- Chromatic: K-Means if enough pixels ---------------------------
             if chromatic.shape[0] >= cfg.min_chromatic_for_cluster:
+                # ADR-018 §6.5 — Intervention C.2: weight chromatic K-Means
+                # proportions by per-pixel centrality (gaussian on
+                # normalized distance to crop center). Affects MASS only,
+                # not the K-Means fit (still unweighted Euclidean).
+                weights_chromatic: np.ndarray | None = None
+                if weights_flat is not None and partition.get("is_chromatic_mask") is not None:
+                    is_chrom = partition["is_chromatic_mask"]
+                    # is_chrom shape mirrors lab shape used by partition;
+                    # weights_flat is 1-D with the same length.
+                    is_chrom_flat = np.asarray(is_chrom).reshape(-1)
+                    if is_chrom_flat.shape[0] == weights_flat.shape[0]:
+                        weights_chromatic = weights_flat[is_chrom_flat]
+
                 # Stage 4
-                sampled = subsample(chromatic, max_pixels=cfg.max_pixels, seed=cfg.seed)
+                if weights_chromatic is not None:
+                    sampled, idx = subsample_with_indices(
+                        chromatic, max_pixels=cfg.max_pixels, seed=cfg.seed,
+                    )
+                    sampled_weights = weights_chromatic[idx]
+                else:
+                    sampled = subsample(chromatic, max_pixels=cfg.max_pixels, seed=cfg.seed)
+                    sampled_weights = None
                 # Stage 5
                 k_use = min(cfg.k_initial, sampled.shape[0])
                 centroids, props = cluster_kmeans(
@@ -202,19 +240,66 @@ class KMeansAnalyzer(IColorAnalyzer):
                     seed=cfg.seed,
                     use_minibatch=cfg.use_minibatch,
                     minibatch_size=cfg.minibatch_size,
+                    weights=sampled_weights,
                 )
-                # Convert local proportions (over chromatic) → global proportions
-                chromatic_share = chromatic.shape[0] / total_meaningful
+                # ADR-018 §6.4 — Intervention C.1: absorb small chromatic
+                # clusters into nearest chromatic peak before adding
+                # achromatic buckets.
+                if cfg.merge_small_chromatic_enabled:
+                    centroids, props = merge_small_chromatic(
+                        centroids, props,
+                        mass_threshold=cfg.merge_small_chromatic_threshold,
+                    )
+
+                # Compute weighted chromatic mass share when centrality on
+                if weights_chromatic is not None and weights_flat is not None:
+                    chromatic_mass = float(weights_chromatic.sum())
+                    total_mass = float(weights_flat.sum())
+                    chromatic_share = (
+                        chromatic_mass / total_mass if total_mass > 0 else 0.0
+                    )
+                else:
+                    chromatic_share = chromatic.shape[0] / total_meaningful
+
                 for c, p in zip(centroids, props, strict=True):
                     raw.append((np.asarray(c, dtype=np.float64), float(p) * chromatic_share))
 
             # ---- Achromatic buckets ------------------------------------------
             achromatic_centroids = self.palette if self.palette is not None else PALETTE_LAB
-            for name, count in achromatic_counts.items():
-                if count <= 0:
-                    continue
-                prop_global = count / total_meaningful
-                raw.append((achromatic_centroids[name].copy(), prop_global))
+
+            # When centrality on: re-weight achromatic per-bucket masses.
+            achromatic_masses: dict[str, float] = {}
+            if (
+                weights_flat is not None
+                and partition.get("is_achromatic_mask") is not None
+            ):
+                is_achrom_flat = np.asarray(partition["is_achromatic_mask"]).reshape(-1)
+                lab_flat = lab.reshape(-1, 3)
+                if is_achrom_flat.shape[0] == weights_flat.shape[0]:
+                    achr_w = weights_flat[is_achrom_flat]
+                    achr_L_flat = lab_flat[is_achrom_flat, 0]
+                    is_negro = achr_L_flat < cfg.lum_black_max
+                    is_blanco = achr_L_flat > cfg.lum_white_min
+                    is_gris = ~(is_negro | is_blanco)
+                    achromatic_masses["negro"] = float(achr_w[is_negro].sum())
+                    achromatic_masses["blanco"] = float(achr_w[is_blanco].sum())
+                    achromatic_masses["gris"] = float(achr_w[is_gris].sum())
+                    total_mass = float(weights_flat.sum())
+                    for name, mass in achromatic_masses.items():
+                        if mass <= 0 or total_mass <= 0:
+                            continue
+                        prop_global = mass / total_mass
+                        raw.append((achromatic_centroids[name].copy(), prop_global))
+                else:
+                    # Shape mismatch fallback to count-based
+                    weights_flat = None
+
+            if weights_flat is None or not achromatic_masses:
+                for name, count in achromatic_counts.items():
+                    if count <= 0:
+                        continue
+                    prop_global = count / total_meaningful
+                    raw.append((achromatic_centroids[name].copy(), prop_global))
 
             # Stage 6 — merge close + filter + truncate
             # merge_close_centroids treats (centroids, proportions) ndarrays.

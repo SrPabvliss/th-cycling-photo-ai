@@ -155,12 +155,30 @@ def partition_lab_pixels(
         "achromatic_counts": achromatic_counts,
         "total_meaningful": total_meaningful,
         "discarded": discarded,
+        # Boolean masks over the flat input pixels (caller may reshape).
+        # Useful for ADR-018 §6.5 centrality weighting where the caller
+        # needs to index a per-pixel weight array by chromatic membership.
+        "is_chromatic_mask": is_chromatic,
+        "is_achromatic_mask": is_achromatic,
+        "achr_L": achr_L,
     }
 
 
 # ---------------------------------------------------------------------------
 # Stage 4 — Subsampling
 # ---------------------------------------------------------------------------
+
+
+def subsample_with_indices(
+    pixels: np.ndarray, max_pixels: int = 20_000, seed: int = 42,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Random subsample preserving indices so weights can be aligned."""
+    n = pixels.shape[0]
+    if n <= max_pixels:
+        return pixels, np.arange(n)
+    rng = np.random.default_rng(seed)
+    idx = rng.choice(n, size=max_pixels, replace=False)
+    return pixels[idx], idx
 
 
 def subsample(pixels: np.ndarray, max_pixels: int = 20_000, seed: int = 42) -> np.ndarray:
@@ -177,6 +195,21 @@ def subsample(pixels: np.ndarray, max_pixels: int = 20_000, seed: int = 42) -> n
 # ---------------------------------------------------------------------------
 
 
+def compute_centrality_weights(h: int, w: int, sigma: float = 0.4) -> np.ndarray:
+    """ADR-018 §6.5: per-pixel gaussian weight by normalized distance to crop center.
+
+    Returns (h, w) float64 weights ∈ (0, 1]. σ controls falloff:
+      0.4 — moderate (default ADR-018)
+      0.5-0.6 — relaxed (recommended for wide cyclist_clothes crops)
+      ≥1.0 — near-uniform (centrality effectively disabled).
+    """
+    cy, cx = h / 2.0, w / 2.0
+    yy, xx = np.indices((h, w))
+    d = np.sqrt(((yy - cy) / h) ** 2 + ((xx - cx) / w) ** 2)
+    weights = np.exp(-(d ** 2) / (2.0 * sigma * sigma))
+    return weights.astype(np.float64)
+
+
 def cluster_kmeans(
     pixels_lab: np.ndarray,
     k: int = 5,
@@ -185,8 +218,14 @@ def cluster_kmeans(
     seed: int = 42,
     use_minibatch: bool = False,
     minibatch_size: int = 1024,
+    weights: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Fit KMeans on CIELAB pixels. Returns (centroids (k,3), proportions (k,))."""
+    """Fit KMeans on CIELAB pixels. Returns (centroids (k,3), proportions (k,)).
+
+    `weights` (optional, shape (N,)): per-pixel weights used ONLY for the
+    proportion computation (ADR-018 §6.5 centrality). The K-Means fit
+    itself stays unweighted Euclidean.
+    """
     if use_minibatch:
         km = MiniBatchKMeans(
             n_clusters=k,
@@ -207,10 +246,68 @@ def cluster_kmeans(
     km.fit(pixels_lab)
 
     centroids = km.cluster_centers_
-    counts = np.bincount(km.labels_, minlength=k)
+    if weights is None:
+        counts = np.bincount(km.labels_, minlength=k).astype(np.float64)
+    else:
+        counts = np.zeros(k, dtype=np.float64)
+        np.add.at(counts, km.labels_, weights)
     total = counts.sum()
     proportions = counts / total if total > 0 else np.zeros(k, dtype=np.float64)
     return centroids, proportions
+
+
+# ---------------------------------------------------------------------------
+# Stage 5b — Merge small chromatic clusters into nearest chromatic neighbor
+#            (ADR-018 §6.4 Intervention C.1)
+# ---------------------------------------------------------------------------
+
+
+def merge_small_chromatic(
+    centroids: np.ndarray,
+    proportions: np.ndarray,
+    mass_threshold: float = 0.06,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Absorb small clusters into the nearest LARGER cluster by CIEDE2000.
+
+    ADR-018 §6.4: clusters with mass < `mass_threshold` (typical 0.06)
+    are noise; routing them into the nearest chromatic peak prevents
+    fragmentation of the dominant hue when a jersey has shadow-tinted
+    pixels. Small clusters with no larger neighbor are kept as-is.
+
+    Operates on chromatic K-Means output BEFORE achromatic buckets are
+    added so achromatic centroids do not absorb chromatic mass.
+    """
+    if len(proportions) <= 1:
+        return centroids, proportions
+
+    keep_mask = proportions >= mass_threshold
+    if keep_mask.all():
+        return centroids, proportions
+    if not keep_mask.any():
+        # All clusters small — keep only the largest as anchor.
+        idx = int(np.argmax(proportions))
+        keep_mask = np.zeros_like(keep_mask)
+        keep_mask[idx] = True
+
+    kept_c = centroids[keep_mask].copy()
+    kept_p = proportions[keep_mask].copy()
+    small_c = centroids[~keep_mask]
+    small_p = proportions[~keep_mask]
+
+    for sc, sp in zip(small_c, small_p, strict=True):
+        distances = np.array([
+            float(deltaE_ciede2000(
+                sc.reshape(1, 1, 3), kc.reshape(1, 1, 3),
+            )[0, 0])
+            for kc in kept_c
+        ])
+        nearest = int(np.argmin(distances))
+        # Proportion-weighted centroid update + mass absorption
+        new_total = kept_p[nearest] + sp
+        kept_c[nearest] = (kept_c[nearest] * kept_p[nearest] + sc * sp) / new_total
+        kept_p[nearest] = new_total
+
+    return kept_c, kept_p
 
 
 # ---------------------------------------------------------------------------

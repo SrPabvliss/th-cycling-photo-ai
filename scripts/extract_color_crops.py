@@ -164,8 +164,11 @@ def extract_crop(
 
 
 def balance_per_region(
-    candidates: list[CropCandidate], max_per_region: int, seed: int
+    candidates: list[CropCandidate], max_per_region: int, seed: int,
+    preferred_keys: set[tuple[str, str]] | None = None,
 ) -> list[CropCandidate]:
+    """If preferred_keys is provided ({(source_image, region), ...}), candidates
+    matching those keys are placed first, then random fill-up to max_per_region."""
     rng = random.Random(seed)
     by_region: dict[str, list[CropCandidate]] = {r: [] for r in TARGET_CLASSES}
     for c in candidates:
@@ -173,10 +176,22 @@ def balance_per_region(
 
     balanced: list[CropCandidate] = []
     for region, items in by_region.items():
-        rng.shuffle(items)
-        n_keep = min(max_per_region, len(items))
-        balanced.extend(items[:n_keep])
-        print(f"  {region}: kept {n_keep}/{len(items)}")
+        if preferred_keys:
+            preferred = [c for c in items if (c.image_path.name, c.region) in preferred_keys]
+            rest = [c for c in items if (c.image_path.name, c.region) not in preferred_keys]
+            rng.shuffle(preferred)
+            rng.shuffle(rest)
+            ordered = preferred + rest
+            n_pref = min(len(preferred), max_per_region)
+            n_keep = min(max_per_region, len(ordered))
+            balanced.extend(ordered[:n_keep])
+            print(f"  {region}: kept {n_keep}/{len(items)} "
+                  f"(preferred (img,region) carry-over: {n_pref})")
+        else:
+            rng.shuffle(items)
+            n_keep = min(max_per_region, len(items))
+            balanced.extend(items[:n_keep])
+            print(f"  {region}: kept {n_keep}/{len(items)}")
     return balanced
 
 
@@ -193,13 +208,24 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument(
+        "--source-dir", type=Path, default=None,
+        help="Override COCO source dir. Default: CLEAN_DATASET_DIR (clean_v10). "
+             "For post-Phase-4 dedup pass: experiments/audit_adr015/dataset/v3_cleaned",
+    )
+    parser.add_argument(
+        "--prefer-images-from", type=Path, default=None,
+        help="Path to old metadata.csv. Prioritize candidates whose source_image "
+             "appears in this CSV (maximizes label carry-over after re-extraction).",
+    )
+    parser.add_argument(
         "--clear", action="store_true",
         help="Delete existing crops + metadata before extracting (recommended on re-run)",
     )
     args = parser.parse_args()
 
-    if not CLEAN_DATASET_DIR.exists():
-        raise SystemExit(f"Clean dataset not found: {CLEAN_DATASET_DIR}")
+    source_dir = args.source_dir or CLEAN_DATASET_DIR
+    if not source_dir.exists():
+        raise SystemExit(f"Source dataset not found: {source_dir}")
 
     output_dir = args.output_dir or COLOR_CROPS_DIR
 
@@ -218,14 +244,26 @@ def main() -> None:
     for region in TARGET_CLASSES:
         (output_dir / region).mkdir(parents=True, exist_ok=True)
 
-    print(f"Reading from: {CLEAN_DATASET_DIR}")
+    print(f"Reading from: {source_dir}")
     print(f"Writing to: {output_dir}\n")
 
-    candidates = collect_candidates(CLEAN_DATASET_DIR, args.splits)
+    candidates = collect_candidates(source_dir, args.splits)
     print(f"\nTotal candidates: {len(candidates)}")
 
+    preferred_keys: set[tuple[str, str]] | None = None
+    if args.prefer_images_from is not None:
+        preferred_keys = set()
+        with open(args.prefer_images_from) as f:
+            for row in csv.DictReader(f):
+                preferred_keys.add((row["source_image"], row["region"]))
+        print(f"\nPreferred (img,region) keys from {args.prefer_images_from}: "
+              f"{len(preferred_keys)}")
+
     print("\nBalancing per region:")
-    selected = balance_per_region(candidates, args.max_per_region, args.seed)
+    selected = balance_per_region(
+        candidates, args.max_per_region, args.seed,
+        preferred_keys=preferred_keys,
+    )
 
     metadata_rows: list[dict] = []
     crop_id = 0

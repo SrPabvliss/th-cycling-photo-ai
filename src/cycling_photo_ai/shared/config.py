@@ -180,6 +180,23 @@ class ColorAnalysisConfig(BaseModel):
     # algorithm output with user intent ("the bike is red" — focal hue,
     # not pixel-dominant). 0.0 disables the rule.
     chromatic_priority_threshold: float = 0.25
+    # Achromatic suppression (ADR-018 §6.3 Intervention B). When enabled
+    # AND a chromatic cluster meets `min_chromatic_mass`, achromatic
+    # clusters with chroma < `achromatic_chroma_max` are EXCLUDED from
+    # primary/secondary selection (not just demoted). Suppression
+    # auto-disables when no chromatic cluster meets the gate (preserves
+    # legitimately-achromatic helmets).
+    achromatic_suppression_enabled: bool = False
+    achromatic_min_chromatic_mass: float = 0.12
+    achromatic_chroma_max: float = 5.0
+    # Intervention C.1 (ADR-018 §6.4): merge small chromatic clusters
+    # into nearest chromatic peak before achromatic buckets are added.
+    merge_small_chromatic_enabled: bool = False
+    merge_small_chromatic_threshold: float = 0.06
+    # Intervention C.2 (ADR-018 §6.5): centrality weighting for K-Means.
+    # Pixels closer to crop center get higher weight via gaussian σ.
+    centrality_enabled: bool = False
+    centrality_sigma: float = 0.4
     model_version: str = "kmeans-v1"
 
 

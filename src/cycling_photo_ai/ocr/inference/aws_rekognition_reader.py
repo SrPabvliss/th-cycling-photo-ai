@@ -33,6 +33,9 @@ class AwsRekognitionBibReader:
         self._region_name = region_name or os.environ.get("AWS_REGION", "us-east-1")
         self._min_word_confidence = min_word_confidence
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
+        # Mini-app introspection (TTV-MINIAPP). Populated from
+        # response["ResponseMetadata"]["RequestId"] after each call.
+        self._last_request_id: str | None = None
 
     def _load(self) -> None:
         import boto3
@@ -71,6 +74,14 @@ class AwsRekognitionBibReader:
                 rejection_reason=f"api_error:{type(e).__name__}:{str(e)[:60]}",
                 raw_text=None,
             )
+
+        # Capture AWS request id for traceability (TTV-MINIAPP).
+        try:
+            self._last_request_id = (
+                response.get("ResponseMetadata", {}).get("RequestId") or None
+            )
+        except Exception:
+            self._last_request_id = None
 
         detections = response.get("TextDetections", [])
         lines = [d for d in detections if d.get("Type") == "LINE"]

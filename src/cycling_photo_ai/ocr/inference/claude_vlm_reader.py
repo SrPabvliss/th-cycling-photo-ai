@@ -64,6 +64,8 @@ class ClaudeVlmReader:
         model_id: str = "claude-haiku-4-5-20251001",
         n_samples: int = 3,
         temperature: float = 0.7,
+        prompt_override: str | None = None,
+        enable_prompt_caching: bool = False,
     ) -> None:
         self._model_id = model_id
         # Claude Opus 4.7+ deprecated user-controlled temperature — single sample only.
@@ -72,6 +74,17 @@ class ClaudeVlmReader:
         self._temperature = temperature
         self._client = None
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
+        # Mini-app integration (TTV-MINIAPP). Defaults preserve existing behavior.
+        self._prompt_override = prompt_override
+        self._enable_prompt_caching = enable_prompt_caching
+        self._last_usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_tokens": 0,
+        }
+        self._last_request_id: str | None = None
 
     def _load(self) -> None:
         from anthropic import Anthropic
@@ -92,12 +105,26 @@ class ClaudeVlmReader:
         # Run N samples in parallel via threads (Anthropic SDK is sync per-call)
         from concurrent.futures import ThreadPoolExecutor
 
-        def _one_sample() -> tuple[str, str]:
+        user_text = self._prompt_override if self._prompt_override else USER_PROMPT
+        # Build system prompt blocks. cache_control=ephemeral on the system
+        # block enables Anthropic prompt caching when enabled (per docs).
+        if self._enable_prompt_caching:
+            system_param: list[dict] | str = [
+                {
+                    "type": "text",
+                    "text": SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        else:
+            system_param = SYSTEM_PROMPT
+
+        def _one_sample() -> tuple[str, str, object]:
             try:
                 kwargs = {
                     "model": self._model_id,
                     "max_tokens": 50,
-                    "system": SYSTEM_PROMPT,
+                    "system": system_param,
                 }
                 if self._supports_temperature:
                     kwargs["temperature"] = self._temperature
@@ -115,7 +142,7 @@ class ClaudeVlmReader:
                                         "data": b64,
                                     },
                                 },
-                                {"type": "text", "text": USER_PROMPT},
+                                {"type": "text", "text": user_text},
                             ],
                         }
                     ],
@@ -126,21 +153,24 @@ class ClaudeVlmReader:
                 for block in resp.content:
                     if getattr(block, "type", None) == "tool_use":
                         n = (block.input or {}).get("number", "")
-                        return str(n).strip(), ""
+                        return str(n).strip(), "", resp
                 # No tool_use → fallback to plain text
                 for block in resp.content:
                     if getattr(block, "type", None) == "text":
                         digits, _ = extract_bib_digits(block.text)
-                        return digits, "fallback_text"
-                return "", "no_tool_use"
+                        return digits, "fallback_text", resp
+                return "", "no_tool_use", resp
             except Exception as e:
-                return "", f"api_error:{type(e).__name__}"
+                return "", f"api_error:{type(e).__name__}", None
 
         with ThreadPoolExecutor(max_workers=self._n_samples) as pool:
             results = list(pool.map(lambda _: _one_sample(), range(self._n_samples)))
 
-        samples = [d for d, _ in results if d]
-        errors = [r for d, r in results if r and not d]
+        # Aggregate token usage across N samples (TTV-MINIAPP).
+        self._record_usage([r[2] for r in results if r[2] is not None])
+
+        samples = [d for d, _, _ in results if d]
+        errors = [r for d, r, _ in results if r and not d]
 
         if not samples:
             err = errors[0] if errors else "all_samples_empty"
@@ -159,6 +189,46 @@ class ClaudeVlmReader:
 
     def is_loaded(self) -> bool:
         return self._client is not None
+
+    def _record_usage(self, responses: list) -> None:
+        """Aggregate token usage across N samples and capture request_id.
+
+        Anthropic Messages API exposes usage with: input_tokens,
+        output_tokens, cache_creation_input_tokens, cache_read_input_tokens.
+        Mapping:
+          input_tokens         → input_tokens
+          output_tokens        → output_tokens
+          cache_read_input     → cached_input_tokens
+          cache_creation_input → cache_write_tokens
+        Claude has no thinking tokens unless extended thinking is on (not
+        used in this adapter), so thinking_tokens stays 0.
+        """
+        agg = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cached_input_tokens": 0,
+            "cache_write_tokens": 0,
+        }
+        last_request_id: str | None = None
+        for resp in responses:
+            if resp is None:
+                continue
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                agg["input_tokens"] += int(getattr(usage, "input_tokens", 0) or 0)
+                agg["output_tokens"] += int(getattr(usage, "output_tokens", 0) or 0)
+                agg["cached_input_tokens"] += int(
+                    getattr(usage, "cache_read_input_tokens", 0) or 0
+                )
+                agg["cache_write_tokens"] += int(
+                    getattr(usage, "cache_creation_input_tokens", 0) or 0
+                )
+            rid = getattr(resp, "_request_id", None) or getattr(resp, "id", None)
+            if rid:
+                last_request_id = rid
+        self._last_usage = agg
+        self._last_request_id = last_request_id
 
 
 def _abstained(reason: str) -> BibReading:

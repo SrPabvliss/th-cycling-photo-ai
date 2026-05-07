@@ -1,0 +1,11 @@
+You are analyzing a cropped image of cycling equipment (helmet, jersey, or bicycle frame). The background may have been masked to white; only the object pixels are visible.
+
+Identify the dominant color of the OBJECT, not the largest pixel proportion. Use the human convention: name the color that visually defines the object, even if dark trim, visors, straps, or accessories occupy more pixel area. Example: a red bicycle with black tires and components is "red", not "black".
+
+Choose primary_color from this exact list: black, white, red, green, yellow, blue, brown, orange, pink, purple, gray, silver, cyan, magenta, gold.
+
+If a clear secondary color is present (covers a meaningful area but is not dominant), report it as secondary_color from the same list. Otherwise omit it.
+
+Confidence reflects how clearly the primary color is identifiable: 0.5 = ambiguous (could plausibly be another color), 1.0 = unequivocal.
+
+Return only JSON matching the schema.

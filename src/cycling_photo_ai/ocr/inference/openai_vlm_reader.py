@@ -36,11 +36,25 @@ USER_PROMPT = "What number is shown on this cycling bib?"
 class OpenAIVlmReader:
     """OpenAI vision OCR for cycling bibs."""
 
-    def __init__(self, model_id: str = "gpt-4o-mini-2024-07-18") -> None:
+    def __init__(
+        self,
+        model_id: str = "gpt-4o-mini-2024-07-18",
+        prompt_override: str | None = None,
+    ) -> None:
         self._model_id = model_id
         self._client = None
         self._is_gpt5 = model_id.startswith("gpt-5")
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
+        # Mini-app integration (TTV-MINIAPP). prompt_override=None → existing
+        # USER_PROMPT used so existing callers see no change.
+        self._prompt_override = prompt_override
+        self._last_usage: dict[str, int] = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thinking_tokens": 0,
+            "cached_input_tokens": 0,
+        }
+        self._last_request_id: str | None = None
 
     def _load(self) -> None:
         from openai import OpenAI
@@ -64,6 +78,7 @@ class OpenAIVlmReader:
         # GPT-5+ uses max_completion_tokens; GPT-4o family uses max_tokens.
         token_kwarg = "max_completion_tokens" if self._is_gpt5 else "max_tokens"
         # GPT-5 also rejects `temperature` for some snapshots; pass only when safe.
+        user_text = self._prompt_override if self._prompt_override else USER_PROMPT
         common = {
             "model": self._model_id,
             "messages": [
@@ -72,7 +87,7 @@ class OpenAIVlmReader:
                     "role": "user",
                     "content": [
                         {"type": "image_url", "image_url": image_url},
-                        {"type": "text", "text": USER_PROMPT},
+                        {"type": "text", "text": user_text},
                     ],
                 },
             ],
@@ -106,6 +121,8 @@ class OpenAIVlmReader:
         except Exception as e:
             return _abstained(f"api_error:{type(e).__name__}:{str(e)[:80]}")
 
+        self._record_usage(response)
+
         choice = response.choices[0]
         raw = choice.message.content or ""
         digits, reason = extract_bib_digits(raw)
@@ -118,6 +135,56 @@ class OpenAIVlmReader:
 
     def is_loaded(self) -> bool:
         return self._client is not None
+
+    def _record_usage(self, response) -> None:
+        """Populate self._last_usage and self._last_request_id from OpenAI response.
+
+        Uses chat.completions response.usage. cached_input via
+        prompt_tokens_details.cached_tokens (gpt-4o-mini and gpt-5).
+        reasoning_tokens via completion_tokens_details.reasoning_tokens
+        (gpt-5 only) → mapped to thinking_tokens.
+        """
+        usage = getattr(response, "usage", None)
+        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+
+        cached = 0
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        if prompt_details is not None:
+            cached = int(
+                getattr(prompt_details, "cached_tokens", 0)
+                or (prompt_details.get("cached_tokens", 0)
+                    if isinstance(prompt_details, dict) else 0)
+                or 0
+            )
+
+        thinking = 0
+        completion_details = getattr(usage, "completion_tokens_details", None)
+        if completion_details is not None:
+            thinking = int(
+                getattr(completion_details, "reasoning_tokens", 0)
+                or (completion_details.get("reasoning_tokens", 0)
+                    if isinstance(completion_details, dict) else 0)
+                or 0
+            )
+
+        self._last_usage = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "thinking_tokens": thinking,
+            "cached_input_tokens": cached,
+        }
+
+        # OpenAI Python SDK exposes _request_id on response objects.
+        request_id = getattr(response, "_request_id", None)
+        if request_id is None:
+            try:
+                headers = getattr(response, "headers", None)
+                if headers is not None:
+                    request_id = headers.get("x-request-id")
+            except Exception:
+                request_id = None
+        self._last_request_id = request_id
 
 
 def _abstained(reason: str) -> BibReading:

@@ -1,0 +1,1 @@
+{"session_id":"2026-05-03_22-58-07","image_sha256":"47ff6e52119c59d27850a86969bf0a976da9ea95822b265a7ad30a33bd52aa8e","stage":"detection","system_id":"gemini_2_5_pro","parent_crop_sha256":null,"region":null,"judgment_codes":["missed","bad_crop","false_positive"],"correct_value":null,"notes":"not even close to cyclist","judged_at":"2026-05-03T23:01:45.105438+00:00"}

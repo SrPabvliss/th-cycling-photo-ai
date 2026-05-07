@@ -1,0 +1,22 @@
+palette_version: palette-adr018
+# ADR-018 §5 TAXONOMY_ANCHORS, mapped EN→ES for runtime compat. Source:
+# Berlin & Kay theoretical centroids + run-7 empirical green. `dorado`
+# fallback to canonical (ADR-018 omits gold). Pre-calibration baseline
+# for S1 ablation: tests whether ADR-018 starting points beat our
+# empirical-v2 (which was K-Means-anchored against canonical PALETTE_LAB).
+centroids:
+  rojo:     [50.0,  65.0,  45.0]   # red
+  naranja:  [65.0,  45.0,  65.0]   # orange
+  amarillo: [85.0,  -5.0,  85.0]   # yellow
+  verde:    [48.5, -10.3,  16.3]   # green (empirical from run 7)
+  azul:     [35.0,  10.0, -55.0]   # blue
+  celeste:  [70.0, -35.0, -15.0]   # cyan
+  morado:   [35.0,  45.0, -35.0]   # purple
+  rosa:     [75.0,  35.0,   5.0]   # pink
+  fucsia:   [55.0,  75.0, -25.0]   # magenta
+  marron:   [35.0,  20.0,  30.0]   # brown
+  negro:    [15.0,   0.0,   0.0]   # black
+  gris:     [55.0,   0.0,   0.0]   # gray
+  blanco:   [92.0,   0.0,   0.0]   # white
+  dorado:   [73.0,   8.0,  65.0]   # gold (ADR-018 omits; canonical fallback)
+  plateado: [75.0,   0.0,   0.0]   # silver
