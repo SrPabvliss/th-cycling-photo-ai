@@ -1107,6 +1107,12 @@ GeminiColorStrategy via GOOGLE_AI_API_KEY      color (opt-in)
 
 **Next:** tag `v1.0-color`. Color phase complete.
 
+> **Note (2026-05-06):** backend integration handoff lives at
+> `docs/backend_integration_handoff.md`. Pipeline contract is frozen
+> at `schema_version="1.0"`. ADR closing the cyclist-identity question
+> (rejected, attribute-centric data model adopted) at
+> `docs/ADR-pipeline-attribute-centric.md`.
+
 > **Note (post Run 22, 2026-05-04):** the `Available: manual (default, ...),
 > gemini, none` factory described above was superseded. Manual was
 > disconnected from the runtime pipeline after the manual-evaluation
