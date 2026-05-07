@@ -195,6 +195,7 @@ async def pipeline(
             Path(image_path).unlink(missing_ok=True)
 
     return PipelineResponse(
+        image_id=request.image_id,
         detections=[DetectionItem(**d) for d in result.detections],
         bib_readings=[BibReadingItem(**b) for b in result.bib_readings],
         color_analyses=[ColorAnalysisItem(**c) for c in result.color_analyses],
