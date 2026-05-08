@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 class PipelineRequest(BaseModel):
     """POST /pipeline request body."""
 
+    image_id: str = Field(description="Caller-supplied image identifier. Echoed back in the response so the backend can correlate request and result.")
     image_url: str = Field(description="URL of image to process (Backblaze or local path)")
     event_id: str | None = Field(default=None, description="Event identifier for startlist lookup")
     startlist: list[str] | None = Field(default=None, description="Valid bib numbers for this event")
@@ -92,6 +93,7 @@ class PipelineResponse(BaseModel):
     """POST /pipeline response body."""
 
     schema_version: str = Field(default="1.0", description="Response schema version. Backend should pin and detect mismatches. Bumped on breaking changes; minor non-breaking additions stay on the same major.")
+    image_id: str = Field(description="Echo of the caller-supplied image_id from the request. Backend asserts equality to detect routing/correlation bugs.")
     detections: list[DetectionItem]
     bib_readings: list[BibReadingItem]
     color_analyses: list[ColorAnalysisItem] = []
