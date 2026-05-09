@@ -148,7 +148,7 @@ def test_orchestrator_attaches_crop_path_to_bibs_when_urls_provided(
         digits="20",
         confidence=0.95,
         confidence_per_digit=[0.95, 0.95],
-        status="matched",
+        status="read",
         raw_text="20",
     )
 
@@ -217,7 +217,7 @@ def test_orchestrator_emits_crop_upload_disabled_when_no_urls(
         digits="20",
         confidence=0.95,
         confidence_per_digit=[0.95, 0.95],
-        status="matched",
+        status="read",
         raw_text="20",
     )
 
@@ -239,7 +239,7 @@ def test_orchestrator_emits_crop_upload_failed_for_failed_put(
         digits="20",
         confidence=0.95,
         confidence_per_digit=[0.95, 0.95],
-        status="matched",
+        status="read",
         raw_text="20",
     )
     monkeypatch.setattr(
@@ -272,7 +272,7 @@ def test_orchestrator_emits_crop_upload_overflow_for_bibs(
         digits="20",
         confidence=0.95,
         confidence_per_digit=[0.95, 0.95],
-        status="matched",
+        status="read",
         raw_text="20",
     )
     monkeypatch.setattr(

@@ -130,7 +130,7 @@ class PARSeqReader:
             status = "abstained"
             rejection_reason = f"low_confidence_{overall_conf:.2f}"
         else:
-            status = "unmatched"
+            status = "read"
             rejection_reason = None
 
         return BibReading(

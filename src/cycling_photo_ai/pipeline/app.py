@@ -188,7 +188,6 @@ async def pipeline(
     try:
         result = orch.process(
             image_path=image_path,
-            startlist=request.startlist,
             crop_upload_urls=request.crop_upload_urls,
         )
     finally:

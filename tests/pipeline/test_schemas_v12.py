@@ -1,4 +1,4 @@
-"""Schema v1.1 contract tests — crop_upload_urls in request, crop_path in response items."""
+"""Schema v1.2 contract tests — crop_upload_urls in request, crop_path in response items, simplified bib status."""
 
 from __future__ import annotations
 
@@ -42,19 +42,31 @@ def test_crop_upload_urls_defaults_are_empty_lists():
     assert urls.colors_bicycle == []
 
 
-def test_bib_reading_item_has_crop_path_default_none():
+def test_bib_reading_item_accepts_read_status():
     item = BibReadingItem(
         digits="20",
         confidence=0.9,
         confidence_per_digit=[0.9, 0.9],
-        status="matched",
+        status="read",
         rejection_reason=None,
         preprocessing_applied=[],
         bbox_source=[0.1, 0.1, 0.2, 0.2],
         raw_ocr_text="20",
         processing_ms=100.0,
     )
+    assert item.status == "read"
     assert item.crop_path is None
+
+
+def test_bib_reading_item_accepts_abstained_status():
+    item = BibReadingItem(
+        digits="",
+        confidence=0.1,
+        confidence_per_digit=[],
+        status="abstained",
+        rejection_reason="empty_prediction",
+    )
+    assert item.status == "abstained"
 
 
 def test_bib_reading_item_accepts_crop_path():
@@ -62,7 +74,7 @@ def test_bib_reading_item_accepts_crop_path():
         digits="20",
         confidence=0.9,
         confidence_per_digit=[0.9, 0.9],
-        status="matched",
+        status="read",
         crop_path="events/e/photos/p/crops/bibs/0.jpg",
     )
     assert item.crop_path == "events/e/photos/p/crops/bibs/0.jpg"
@@ -92,7 +104,7 @@ def test_color_analysis_item_accepts_crop_path():
     assert item.crop_path == "events/e/photos/p/crops/colors/helmet/0.jpg"
 
 
-def test_pipeline_response_schema_version_is_1_1():
+def test_pipeline_response_schema_version_is_1_2():
     response = PipelineResponse(
         image_id="p",
         detections=[],
@@ -102,4 +114,4 @@ def test_pipeline_response_schema_version_is_1_1():
         image_height=100,
         processing_ms=0.0,
     )
-    assert response.schema_version == "1.1"
+    assert response.schema_version == "1.2"

@@ -16,7 +16,7 @@ import requests
 
 from cycling_photo_ai.color.strategies.base import ColorAnalysisStrategy
 from cycling_photo_ai.detection.inference.ports import IDetector
-from cycling_photo_ai.ocr.inference.ports import BibReading, IBibReader
+from cycling_photo_ai.ocr.inference.ports import IBibReader
 from cycling_photo_ai.pipeline.schemas import CropUploadUrls
 
 COLOR_REGIONS = ("helmet", "cyclist_clothes", "bicycle")
@@ -124,13 +124,12 @@ class PipelineOrchestrator:
     def process(
         self,
         image_path: str,
-        startlist: list[str] | None = None,
         crop_upload_urls: CropUploadUrls | None = None,
     ) -> PipelineResult:
         """Run full pipeline on one image.
 
         1. Detect objects.
-        2. For each competidor_number bbox, crop + run OCR (+ startlist validate).
+        2. For each competidor_number bbox, crop + run OCR.
         3. For each helmet / cyclist_clothes / bicycle bbox, crop + run color.
 
         When `crop_upload_urls` is provided, each generated crop is uploaded via
@@ -218,7 +217,6 @@ class PipelineOrchestrator:
             ocr_succeeded = 0
             ocr_failed = 0
             ocr_abstained = 0
-            ocr_unmatched = 0
             ocr_notes: list[str] = []
             bib_url_list = (
                 crop_upload_urls.bibs if crop_upload_urls is not None else []
@@ -245,27 +243,6 @@ class PipelineOrchestrator:
                         continue
                     ocr_item_ms = (time.perf_counter() - ocr_t0) * 1000
                     ocr_ms_total += ocr_item_ms
-                    if startlist and reading.status != "abstained":
-                        if reading.digits in startlist:
-                            reading = BibReading(
-                                digits=reading.digits,
-                                confidence=reading.confidence,
-                                confidence_per_digit=reading.confidence_per_digit,
-                                status="matched",
-                                startlist_match=reading.digits,
-                                preprocessing_applied=reading.preprocessing_applied,
-                                raw_text=reading.raw_text,
-                            )
-                        else:
-                            reading = BibReading(
-                                digits=reading.digits,
-                                confidence=reading.confidence,
-                                confidence_per_digit=reading.confidence_per_digit,
-                                status="unmatched",
-                                rejection_reason="not_in_startlist",
-                                preprocessing_applied=reading.preprocessing_applied,
-                                raw_text=reading.raw_text,
-                            )
                     # Crop upload (after successful OCR; URL may be missing on overflow)
                     crop_path: str | None = None
                     if crop_upload_urls is not None and idx < len(bib_url_list):
@@ -278,7 +255,6 @@ class PipelineOrchestrator:
                         "confidence_per_digit": reading.confidence_per_digit,
                         "status": reading.status,
                         "rejection_reason": reading.rejection_reason,
-                        "startlist_match": reading.startlist_match,
                         "preprocessing_applied": reading.preprocessing_applied or [],
                         "bbox_source": list(det.bbox),
                         "raw_ocr_text": reading.raw_text,
@@ -288,8 +264,6 @@ class PipelineOrchestrator:
                     ocr_succeeded += 1
                     if reading.status == "abstained":
                         ocr_abstained += 1
-                    elif reading.status == "unmatched":
-                        ocr_unmatched += 1
 
             # Finalize OCR stage result
             if self._bib_reader is None:
@@ -306,8 +280,6 @@ class PipelineOrchestrator:
                 ocr_status = "partial"
             if ocr_abstained:
                 ocr_notes.append(f"abstained:{ocr_abstained}")
-            if ocr_unmatched:
-                ocr_notes.append(f"unmatched:{ocr_unmatched}")
             # Crop upload notes (single note per stage)
             if crop_upload_urls is None:
                 ocr_notes.append("crop_upload_disabled")

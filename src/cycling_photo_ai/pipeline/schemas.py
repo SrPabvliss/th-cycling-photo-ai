@@ -28,8 +28,7 @@ class PipelineRequest(BaseModel):
 
     image_id: str = Field(description="Caller-supplied image identifier. Echoed back in the response so the backend can correlate request and result.")
     image_url: str = Field(description="URL of image to process (Backblaze or local path)")
-    event_id: str | None = Field(default=None, description="Event identifier for startlist lookup")
-    startlist: list[str] | None = Field(default=None, description="Valid bib numbers for this event")
+    event_id: str | None = Field(default=None, description="Event identifier for backend correlation")
     confidence_threshold: float = Field(default=0.25, ge=0.0, le=1.0)
     crop_upload_urls: CropUploadUrls | None = Field(default=None, description="Optional signed PUT URLs the pipeline uses to upload bib/color crops directly to bucket storage. When omitted, the pipeline skips crop upload and crop_path is None for all items.")
 
@@ -49,9 +48,8 @@ class BibReadingItem(BaseModel):
     digits: str
     confidence: float = Field(ge=0.0, le=1.0)
     confidence_per_digit: list[float] = []
-    status: str = Field(description="matched | abstained | unmatched")
+    status: str = Field(description="read | abstained")
     rejection_reason: str | None = None
-    startlist_match: str | None = None
     preprocessing_applied: list[str] = []
     bbox_source: list[float] = Field(default=[], description="Detection bbox that produced this crop")
     raw_ocr_text: str | None = None
@@ -110,7 +108,7 @@ class StageTimings(BaseModel):
 class PipelineResponse(BaseModel):
     """POST /pipeline response body."""
 
-    schema_version: Literal["1.1"] = Field(default="1.1", description="Response schema version. Backend should pin and detect mismatches. Bumped on breaking changes; minor non-breaking additions stay on the same major.")
+    schema_version: Literal["1.2"] = Field(default="1.2", description="Response schema version. Backend should pin and detect mismatches. Bumped on breaking changes; minor non-breaking additions stay on the same major.")
     image_id: str = Field(description="Echo of the caller-supplied image_id from the request. Backend asserts equality to detect routing/correlation bugs.")
     detections: list[DetectionItem]
     bib_readings: list[BibReadingItem]
