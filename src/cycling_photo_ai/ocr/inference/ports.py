@@ -18,9 +18,8 @@ class BibReading:
     digits: str
     confidence: float
     confidence_per_digit: list[float]
-    status: str  # "matched", "abstained", "unmatched"
+    status: str  # "read" | "abstained"
     rejection_reason: str | None = None
-    startlist_match: str | None = None
     preprocessing_applied: list[str] | None = None
     raw_text: str | None = None
 

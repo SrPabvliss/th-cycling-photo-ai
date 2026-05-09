@@ -188,7 +188,7 @@ async def pipeline(
     try:
         result = orch.process(
             image_path=image_path,
-            startlist=request.startlist,
+            crop_upload_urls=request.crop_upload_urls,
         )
     finally:
         if image_path != request.image_url:
@@ -313,8 +313,8 @@ async def health() -> HealthResponse:
 
     loaded = (
         list(_detectors.keys())
-        + [f"ocr:{k}" for k in _bib_readers.keys()]
-        + [f"color:{k}" for k in _color_strategies.keys()]
+        + [f"ocr:{k}" for k in _bib_readers]
+        + [f"color:{k}" for k in _color_strategies]
     )
     return HealthResponse(models_loaded=loaded, ram_usage_mb=round(ram_mb, 1))
 
@@ -323,8 +323,8 @@ async def health() -> HealthResponse:
 async def models() -> ModelsResponse:
     loaded = (
         list(_detectors.keys())
-        + [f"ocr:{k}" for k in _bib_readers.keys()]
-        + [f"color:{k}" for k in _color_strategies.keys()]
+        + [f"ocr:{k}" for k in _bib_readers]
+        + [f"color:{k}" for k in _color_strategies]
     )
     available = (
         list(AVAILABLE_DETECTORS)

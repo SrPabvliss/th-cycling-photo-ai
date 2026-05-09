@@ -8,15 +8,58 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
+import cv2
 import numpy as np
+import requests
 
 from cycling_photo_ai.color.strategies.base import ColorAnalysisStrategy
 from cycling_photo_ai.detection.inference.ports import IDetector
-from cycling_photo_ai.ocr.inference.ports import BibReading, IBibReader
+from cycling_photo_ai.ocr.inference.ports import IBibReader
+from cycling_photo_ai.pipeline.schemas import CropUploadUrls
 
 COLOR_REGIONS = ("helmet", "cyclist_clothes", "bicycle")
 COLOR_PADDING_RATIO = 0.08
+CROP_UPLOAD_TIMEOUT_S = 30
+CROP_UPLOAD_JPEG_QUALITY = 85
+
+
+def _upload_crop(crop: np.ndarray, url: str | None) -> tuple[str | None, str | None]:
+    """Encode a BGR numpy crop as JPEG and PUT to a signed URL.
+
+    Returns (crop_path, failure_reason). On success, crop_path is the URL's
+    path component (without leading slash, query stripped); reason is None.
+    On failure, crop_path is None and reason is one of:
+      - "timeout"      — requests.Timeout
+      - "http_<code>"  — HTTP 4xx/5xx
+      - "encode_failed" — cv2.imencode returned False
+      - "network"      — any other exception (DNS, connection, etc.)
+    A `None` URL is a no-op (returns (None, None)).
+    """
+    if url is None:
+        return None, None
+    try:
+        ok, buf = cv2.imencode(
+            ".jpg", crop, [int(cv2.IMWRITE_JPEG_QUALITY), CROP_UPLOAD_JPEG_QUALITY]
+        )
+        if not ok:
+            return None, "encode_failed"
+        resp = requests.put(
+            url,
+            data=buf.tobytes(),
+            headers={"Content-Type": "image/jpeg"},
+            timeout=CROP_UPLOAD_TIMEOUT_S,
+        )
+        resp.raise_for_status()
+        return urlparse(url).path.lstrip("/"), None
+    except requests.Timeout:
+        return None, "timeout"
+    except requests.HTTPError as e:
+        code = e.response.status_code if e.response is not None else "unknown"
+        return None, f"http_{code}"
+    except Exception:
+        return None, "network"
 
 
 @dataclass
@@ -81,13 +124,18 @@ class PipelineOrchestrator:
     def process(
         self,
         image_path: str,
-        startlist: list[str] | None = None,
+        crop_upload_urls: CropUploadUrls | None = None,
     ) -> PipelineResult:
         """Run full pipeline on one image.
 
         1. Detect objects.
-        2. For each competidor_number bbox, crop + run OCR (+ startlist validate).
+        2. For each competidor_number bbox, crop + run OCR.
         3. For each helmet / cyclist_clothes / bicycle bbox, crop + run color.
+
+        When `crop_upload_urls` is provided, each generated crop is uploaded via
+        signed PUT URL; the resulting bucket path is attached to the corresponding
+        bib/color dict as `crop_path`. Failures are reported in stage_results.notes
+        but never abort the pipeline (degradación grácil).
         """
         start = time.perf_counter()
         errors: list[str] = []
@@ -169,15 +217,17 @@ class PipelineOrchestrator:
             ocr_succeeded = 0
             ocr_failed = 0
             ocr_abstained = 0
-            ocr_unmatched = 0
             ocr_notes: list[str] = []
+            bib_url_list = (
+                crop_upload_urls.bibs if crop_upload_urls is not None else []
+            )
             if self._bib_reader is not None:
-                for det in ocr_targets:
+                for idx, det in enumerate(ocr_targets):
                     ocr_processed += 1
                     crop_data = _crop_with_padding(image, det.bbox, self._padding_ratio)
                     if crop_data is None:
                         ocr_failed += 1
-                        ocr_notes.append(f"crop_failed:competidor_number")
+                        ocr_notes.append("crop_failed:competidor_number")
                         errors.append(f"ocr crop failed for bbox {det.bbox}")
                         continue
                     crop, _abs = crop_data
@@ -193,44 +243,27 @@ class PipelineOrchestrator:
                         continue
                     ocr_item_ms = (time.perf_counter() - ocr_t0) * 1000
                     ocr_ms_total += ocr_item_ms
-                    if startlist and reading.status != "abstained":
-                        if reading.digits in startlist:
-                            reading = BibReading(
-                                digits=reading.digits,
-                                confidence=reading.confidence,
-                                confidence_per_digit=reading.confidence_per_digit,
-                                status="matched",
-                                startlist_match=reading.digits,
-                                preprocessing_applied=reading.preprocessing_applied,
-                                raw_text=reading.raw_text,
-                            )
-                        else:
-                            reading = BibReading(
-                                digits=reading.digits,
-                                confidence=reading.confidence,
-                                confidence_per_digit=reading.confidence_per_digit,
-                                status="unmatched",
-                                rejection_reason="not_in_startlist",
-                                preprocessing_applied=reading.preprocessing_applied,
-                                raw_text=reading.raw_text,
-                            )
+                    # Crop upload (after successful OCR; URL may be missing on overflow)
+                    crop_path: str | None = None
+                    if crop_upload_urls is not None and idx < len(bib_url_list):
+                        crop_path, upload_reason = _upload_crop(crop, bib_url_list[idx])
+                        if upload_reason is not None:
+                            ocr_notes.append(f"crop_upload_failed:bibs:{idx}:{upload_reason}")
                     bib_readings.append({
                         "digits": reading.digits,
                         "confidence": reading.confidence,
                         "confidence_per_digit": reading.confidence_per_digit,
                         "status": reading.status,
                         "rejection_reason": reading.rejection_reason,
-                        "startlist_match": reading.startlist_match,
                         "preprocessing_applied": reading.preprocessing_applied or [],
                         "bbox_source": list(det.bbox),
                         "raw_ocr_text": reading.raw_text,
                         "processing_ms": round(ocr_item_ms, 2),
+                        "crop_path": crop_path,
                     })
                     ocr_succeeded += 1
                     if reading.status == "abstained":
                         ocr_abstained += 1
-                    elif reading.status == "unmatched":
-                        ocr_unmatched += 1
 
             # Finalize OCR stage result
             if self._bib_reader is None:
@@ -247,8 +280,11 @@ class PipelineOrchestrator:
                 ocr_status = "partial"
             if ocr_abstained:
                 ocr_notes.append(f"abstained:{ocr_abstained}")
-            if ocr_unmatched:
-                ocr_notes.append(f"unmatched:{ocr_unmatched}")
+            # Crop upload notes (single note per stage)
+            if crop_upload_urls is None:
+                ocr_notes.append("crop_upload_disabled")
+            elif len(ocr_targets) > len(bib_url_list):
+                ocr_notes.append(f"crop_upload_overflow:bibs:{len(ocr_targets)}")
             stage_results.append({
                 "stage": "ocr",
                 "status": ocr_status,
@@ -264,11 +300,27 @@ class PipelineOrchestrator:
             color_succeeded = 0
             color_failed = 0
             color_notes: list[str] = []
+            region_counters: dict[str, int] = {region: 0 for region in COLOR_REGIONS}
+            region_to_field = {
+                "helmet": "colors_helmet",
+                "cyclist_clothes": "colors_clothes",
+                "bicycle": "colors_bicycle",
+            }
+            color_url_lists: dict[str, list[str]] = (
+                {
+                    "helmet": crop_upload_urls.colors_helmet,
+                    "cyclist_clothes": crop_upload_urls.colors_clothes,
+                    "bicycle": crop_upload_urls.colors_bicycle,
+                }
+                if crop_upload_urls is not None
+                else {region: [] for region in COLOR_REGIONS}
+            )
             if self._color_strategy is not None:
-                import cv2
-
                 for det in color_targets:
                     color_processed += 1
+                    region = det.class_name
+                    region_idx = region_counters[region]
+                    region_counters[region] += 1
                     crop_data = _crop_with_padding(image, det.bbox, COLOR_PADDING_RATIO)
                     if crop_data is None:
                         color_failed += 1
@@ -289,6 +341,21 @@ class PipelineOrchestrator:
                         errors.append(f"color({det.class_name}): {e}")
                         continue
                     color_ms_total += cresult.metadata.processing_ms
+                    # Crop upload (after successful color analysis)
+                    color_crop_path: str | None = None
+                    region_url_list = color_url_lists.get(region, [])
+                    if (
+                        crop_upload_urls is not None
+                        and region_idx < len(region_url_list)
+                    ):
+                        color_crop_path, upload_reason = _upload_crop(
+                            crop, region_url_list[region_idx]
+                        )
+                        if upload_reason is not None:
+                            field = region_to_field[region]
+                            color_notes.append(
+                                f"crop_upload_failed:{field}:{region_idx}:{upload_reason}"
+                            )
                     color_analyses.append({
                         "region": det.class_name,
                         "primary_color": cresult.primary_color,
@@ -297,6 +364,7 @@ class PipelineOrchestrator:
                         "bbox_source": list(det.bbox),
                         "strategy": cresult.metadata.strategy,
                         "processing_ms": cresult.metadata.processing_ms,
+                        "crop_path": color_crop_path,
                     })
                     color_succeeded += 1
 
@@ -313,6 +381,15 @@ class PipelineOrchestrator:
                 color_status = "failed"
             else:
                 color_status = "partial"
+            # Crop upload notes
+            if crop_upload_urls is None:
+                color_notes.append("crop_upload_disabled")
+            else:
+                for region, count in region_counters.items():
+                    available = len(color_url_lists.get(region, []))
+                    if count > available:
+                        field = region_to_field[region]
+                        color_notes.append(f"crop_upload_overflow:{field}:{count}")
             stage_results.append({
                 "stage": "color",
                 "status": color_status,
