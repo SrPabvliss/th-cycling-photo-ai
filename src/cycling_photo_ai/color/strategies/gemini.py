@@ -12,8 +12,14 @@ from __future__ import annotations
 import io
 import json
 import os
+import threading
 import time
 from pathlib import Path
+
+# Global semaphore caps concurrent Gemini calls across all threads/strategies.
+# Tier 1 Flash: 1000 RPM / 1M TPM. S=12 leaves ~30% headroom vs RPM.
+_GEMINI_CONCURRENCY = int(os.environ.get("GEMINI_MAX_CONCURRENCY", "12"))
+_GEMINI_SEMAPHORE = threading.Semaphore(_GEMINI_CONCURRENCY)
 
 import numpy as np
 from PIL import Image
@@ -197,14 +203,15 @@ class GeminiColorStrategy(ColorAnalysisStrategy):
         last_exc: Exception | None = None
         for attempt in range(self._max_retries):
             try:
-                response = self._client.models.generate_content(
-                    model=self._model_id,
-                    contents=[
-                        types.Part.from_bytes(data=png_bytes, mime_type="image/png"),
-                        prompt_text,
-                    ],
-                    config=types.GenerateContentConfig(**cfg_kwargs),
-                )
+                with _GEMINI_SEMAPHORE:
+                    response = self._client.models.generate_content(
+                        model=self._model_id,
+                        contents=[
+                            types.Part.from_bytes(data=png_bytes, mime_type="image/png"),
+                            prompt_text,
+                        ],
+                        config=types.GenerateContentConfig(**cfg_kwargs),
+                    )
                 self._record_usage(response)
                 payload = json.loads(response.text)
                 break

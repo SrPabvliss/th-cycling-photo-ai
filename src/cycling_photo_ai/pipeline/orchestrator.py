@@ -6,9 +6,15 @@ Domains don't know about each other; this layer connects them.
 
 from __future__ import annotations
 
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
+
+# Parallel workers for per-crop Gemini color analysis. Bounded above by the
+# module-level semaphore in color/strategies/gemini.py (default 12).
+_COLOR_WORKERS = int(os.environ.get("COLOR_PARALLEL_WORKERS", "4"))
 
 import cv2
 import numpy as np
@@ -316,33 +322,30 @@ class PipelineOrchestrator:
                 else {region: [] for region in COLOR_REGIONS}
             )
             if self._color_strategy is not None:
-                for det in color_targets:
-                    color_processed += 1
+                # Pre-assign region indices sequentially to preserve crop URL mapping.
+                indexed_targets: list[tuple[int, object, int]] = []
+                for i, det in enumerate(color_targets):
                     region = det.class_name
                     region_idx = region_counters[region]
                     region_counters[region] += 1
+                    indexed_targets.append((i, det, region_idx))
+
+                def _process_color(item):
+                    i, det, region_idx = item
+                    region = det.class_name
                     crop_data = _crop_with_padding(image, det.bbox, COLOR_PADDING_RATIO)
                     if crop_data is None:
-                        color_failed += 1
-                        color_notes.append(f"crop_failed:{det.class_name}")
-                        errors.append(f"color crop failed for {det.class_name} bbox {det.bbox}")
-                        continue
+                        return (i, det, region_idx, None, "crop_failed", None, None)
                     crop, _abs = crop_data
-                    # No segmentation mask available at inference (detectors
-                    # output bbox only). Use full bbox crop with alpha=255.
                     rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                     alpha = np.full(rgb.shape[:2], 255, dtype=np.uint8)
                     rgba = np.dstack([rgb, alpha])
                     try:
                         cresult = self._color_strategy.analyze(rgba)
                     except Exception as e:
-                        color_failed += 1
-                        color_notes.append(f"strategy_exception:{det.class_name}:{e}")
-                        errors.append(f"color({det.class_name}): {e}")
-                        continue
-                    color_ms_total += cresult.metadata.processing_ms
-                    # Crop upload (after successful color analysis)
+                        return (i, det, region_idx, None, "strategy_exception", str(e), None)
                     color_crop_path: str | None = None
+                    upload_reason: str | None = None
                     region_url_list = color_url_lists.get(region, [])
                     if (
                         crop_upload_urls is not None
@@ -351,11 +354,35 @@ class PipelineOrchestrator:
                         color_crop_path, upload_reason = _upload_crop(
                             crop, region_url_list[region_idx]
                         )
-                        if upload_reason is not None:
-                            field = region_to_field[region]
-                            color_notes.append(
-                                f"crop_upload_failed:{field}:{region_idx}:{upload_reason}"
-                            )
+                    return (
+                        i, det, region_idx, cresult, None, None,
+                        (color_crop_path, upload_reason),
+                    )
+
+                with ThreadPoolExecutor(max_workers=_COLOR_WORKERS) as pool:
+                    results = list(pool.map(_process_color, indexed_targets))
+
+                results.sort(key=lambda r: r[0])
+                for _i, det, region_idx, cresult, err_kind, err_detail, upload_info in results:
+                    color_processed += 1
+                    region = det.class_name
+                    if err_kind == "crop_failed":
+                        color_failed += 1
+                        color_notes.append(f"crop_failed:{det.class_name}")
+                        errors.append(f"color crop failed for {det.class_name} bbox {det.bbox}")
+                        continue
+                    if err_kind == "strategy_exception":
+                        color_failed += 1
+                        color_notes.append(f"strategy_exception:{det.class_name}:{err_detail}")
+                        errors.append(f"color({det.class_name}): {err_detail}")
+                        continue
+                    color_ms_total += cresult.metadata.processing_ms
+                    color_crop_path, upload_reason = upload_info
+                    if upload_reason is not None:
+                        field = region_to_field[region]
+                        color_notes.append(
+                            f"crop_upload_failed:{field}:{region_idx}:{upload_reason}"
+                        )
                     color_analyses.append({
                         "region": det.class_name,
                         "primary_color": cresult.primary_color,
