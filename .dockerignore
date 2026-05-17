@@ -36,9 +36,11 @@ tests/
 # Config files not needed in production
 configs/
 
-# Weights — excluded by default; Dockerfile re-includes only production weights
-# (yolo11m_v3cleaned + parseq_4phase) via explicit COPY.
-weights/
+# Weights — exclude all by default, re-include only production subdirs.
+# Dockerfile COPY references these via explicit paths.
+weights/**
+!weights/yolo11m_v3cleaned/**
+!weights/parseq_4phase/**
 
 # Stray model weights at repo root (not deployed)
 *.pth
