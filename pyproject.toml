@@ -36,10 +36,13 @@ dependencies = [
     "transformers>=4.40.0,<4.50.0",
     "sentencepiece>=0.2.1",
     "psutil>=5.9.0",
-    # Color analysis (Epic 3)
+    # Color analysis (Epic 3) — Gemini SDK required by GeminiColorStrategy
+    "google-genai>=2.0.0",
     "opencv-python-headless>=4.10.0",
     "scikit-image>=0.24.0",
     "python-multipart>=0.0.9",
+    # PARSeq runtime requirement (declared in PARSeq hubconf dependencies)
+    "pytorch-lightning>=2.0.0",
     # Modal (training infra)
     "modal>=1.4.2",
     "timm>=0.9.16",
