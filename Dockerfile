@@ -1,5 +1,5 @@
-# Cycling Photo AI — Detection + OCR Pipeline
-# Deployment target: Hetzner CPX31 (4 vCPU AMD, 8GB RAM)
+# Cycling Photo AI — Detection + OCR + Color Pipeline
+# Deployment target: Hetzner CPX21 (3 vCPU AMD, 4GB RAM + 2GB swap)
 # CPU-only inference, lazy model loading
 
 # ---- Build stage ----
@@ -46,18 +46,29 @@ ENV PYTHONUNBUFFERED=1
 # Copy source
 COPY --from=builder /app/src /app/src
 
-# Copy model weights (mounted or baked in)
-# Detection: RF-DETR-M (~128MB)
-# OCR: TrOCR-small (~235MB)
-# Total: ~363MB in container
-COPY weights/ /app/weights/
+# Copy production weights only (ablations excluded via .dockerignore)
+# YOLO11m detection (~39MB) + PARSeq OCR (~91MB) = ~130MB total
+COPY weights/yolo11m_v3cleaned/ /app/weights/yolo11m_v3cleaned/
+COPY weights/parseq_4phase/ /app/weights/parseq_4phase/
 
-# Environment variables
-ENV RFDETR_WEIGHTS=/app/weights/rfdetr_best.pth
-ENV TROCR_WEIGHTS=/app/weights/trocr_bib
+# Production pipeline defaults (matches code defaults — set explicitly for clarity)
+ENV DETECTOR_TYPE=yolo
+ENV OCR_TYPE=parseq
+ENV COLOR_STRATEGY_TYPE=gemini
+ENV YOLO_WEIGHTS=/app/weights/yolo11m_v3cleaned/best.pt
+ENV PARSEQ_WEIGHTS=/app/weights/parseq_4phase
 ENV OCR_CONFIDENCE_THRESHOLD=0.70
+
+# Color pipeline parallelism (added 2026-05-17)
+ENV COLOR_PARALLEL_WORKERS=4
+ENV GEMINI_MAX_CONCURRENCY=12
+
+# Server
 ENV HOST=0.0.0.0
 ENV PORT=8001
+
+# GEMINI_API_KEY (or GOOGLE_AI_API_KEY) MUST be injected at runtime (Dokploy env).
+# Not baked here — secret stays out of image.
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

@@ -7,6 +7,8 @@ __pycache__
 *.pyc
 .venv
 *.egg-info
+.pytest_cache
+.ruff_cache
 
 # IDE
 .vscode
@@ -19,6 +21,9 @@ experiments/
 notebooks/
 scripts/
 runs/
+debug_out/
+judgments/
+apps/
 
 # Docs
 *.md
@@ -30,3 +35,16 @@ tests/
 
 # Config files not needed in production
 configs/
+
+# Weights — excluded by default; Dockerfile re-includes only production weights
+# (yolo11m_v3cleaned + parseq_4phase) via explicit COPY.
+weights/
+
+# Stray model weights at repo root (not deployed)
+*.pth
+
+# Graphify output
+graphify-out/
+
+# Env files (secrets stay out of image)
+.env

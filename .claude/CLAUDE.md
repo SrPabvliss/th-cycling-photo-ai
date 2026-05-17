@@ -121,7 +121,7 @@ Domains don't import from each other. `pipeline/` is the thin orchestration laye
 
 ## Deployment
 
-- **VPS:** Hetzner CPX31 (4 vCPU, 8GB RAM, $24.99/mo)
+- **VPS:** Hetzner CPX21 (3 vCPU, 4GB RAM + 2GB swap, 80GB SSD, $13.99/mo) — IP 178.156.223.22
 - **Single service:** detection + OCR in one FastAPI container
 - **Lazy model loading:** models loaded on first request
 - **License:** All models Apache 2.0 (commercially free)
