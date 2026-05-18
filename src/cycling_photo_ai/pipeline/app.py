@@ -58,8 +58,34 @@ AVAILABLE_COLORS = ("gemini", "none")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup/shutdown lifecycle. Models loaded lazily on first request."""
+    """Eager-load default models at startup so first request is fast.
+
+    Lazy load on first /pipeline call adds 5-15s and risks race conditions
+    when concurrent jobs hit a cold instance. Loading here pays the cost
+    once at boot; failures crash the container so Swarm health-checks
+    catch broken images instead of silently serving 0-result responses.
+    """
+    print("[lifespan] Warming up default models...", flush=True)
+
+    detector = _get_detector(DEFAULT_DETECTOR)
+    if not detector.is_loaded():
+        detector._load()
+    print(f"[lifespan] Detector ready: {DEFAULT_DETECTOR}", flush=True)
+
+    reader = _get_bib_reader(DEFAULT_OCR)
+    if not reader.is_loaded():
+        reader._load()
+    print(f"[lifespan] OCR ready: {DEFAULT_OCR}", flush=True)
+
+    color = _get_color_strategy(DEFAULT_COLOR)
+    if color is not None and not color.is_loaded():
+        color._load()
+    print(f"[lifespan] Color ready: {DEFAULT_COLOR}", flush=True)
+
+    print("[lifespan] All models warm.", flush=True)
+
     yield
+
     _detectors.clear()
     _bib_readers.clear()
     _color_strategies.clear()
