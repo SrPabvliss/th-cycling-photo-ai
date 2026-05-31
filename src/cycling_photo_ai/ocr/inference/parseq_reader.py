@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class PARSeqReader:
     """PARSeq-base 4-phase bib reader (Run 14 best model, 98.7% EM@80%)."""
 
-    def __init__(self, weights_dir: str | Path | None = None) -> None:
+    def __init__(self, weights_dir: str | Path | None = None, device: str | None = None) -> None:
         d = weights_dir or os.environ.get("PARSEQ_WEIGHTS", str(WEIGHTS_DIR / "parseq_4phase"))
         self._weights_dir = Path(d)
         self._weights_path = self._weights_dir / "best.pt"
@@ -37,9 +37,16 @@ class PARSeqReader:
         self._tokenizer = None
         self._transform = None
         self._confidence_threshold = float(os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"))
+        self._device_pref = device or os.environ.get("OCR_DEVICE")
+        self._device: str | None = None
 
     def _load(self) -> None:
         import torch
+
+        if self._device_pref:
+            self._device = self._device_pref
+        else:
+            self._device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Ensure baudm/parseq is cached and on sys.path
         hub_dir = Path.home() / ".cache" / "torch" / "hub"
@@ -80,9 +87,9 @@ class PARSeqReader:
             refine_iters=cfg["refine_iters"],
             dropout=cfg["dropout"],
         )
-        state_dict = torch.load(str(self._weights_path), map_location="cpu", weights_only=True)
+        state_dict = torch.load(str(self._weights_path), map_location=self._device, weights_only=True)
         self._model.load_state_dict(state_dict)
-        self._model.eval()
+        self._model = self._model.to(self._device).eval()
 
         from torchvision import transforms as T
 
@@ -104,11 +111,11 @@ class PARSeqReader:
 
         rgb = crop[:, :, ::-1] if crop.ndim == 3 and crop.shape[2] == 3 else crop
         pil = Image.fromarray(rgb)
-        x = self._transform(pil).unsqueeze(0)
+        x = self._transform(pil).unsqueeze(0).to(self._device)
 
-        with torch.no_grad():
+        with torch.inference_mode():
             logits = self._model(self._tokenizer, x)
-            probs = logits.softmax(-1)
+            probs = logits.softmax(-1).cpu()
 
         texts, prob_seqs = self._tokenizer.decode(probs)
         raw_text = texts[0] if texts else ""
