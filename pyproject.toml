@@ -41,8 +41,11 @@ dependencies = [
     "opencv-python-headless>=4.10.0",
     "scikit-image>=0.24.0",
     "python-multipart>=0.0.9",
-    # PARSeq runtime requirement (declared in PARSeq hubconf dependencies)
+    # PARSeq runtime requirements — baudm/parseq importa estos en eager-load.
+    # NO declarados en hubconf dependencies de PARSeq → deben estar acá explícitos.
+    # Sin nltk: strhub/models/base.py crashea con ModuleNotFoundError en startup.
     "pytorch-lightning>=2.0.0",
+    "nltk>=3.7.0",
     # Modal (training infra)
     "modal>=1.4.2",
     "timm>=0.9.16",
