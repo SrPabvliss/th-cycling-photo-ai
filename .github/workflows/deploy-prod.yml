@@ -1,9 +1,8 @@
 name: Deploy Production
 
+# TIT-21: VPS inference dado de baja (prod en Modal). Auto-deploy desactivado;
+# queda solo manual (workflow_dispatch) por si hay que relevantar el VPS.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 concurrency:
