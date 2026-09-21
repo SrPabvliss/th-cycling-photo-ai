@@ -25,4 +25,10 @@ class IDetector(Protocol):
 
     def detect(self, image_path: str) -> list[Detection]: ...
 
+    # Optional. Local detectors also implement
+    #   detect_image(image: PIL.Image, conf: float | None = None) -> list[Detection]
+    # on an already decoded, EXIF-corrected RGB image, so the pipeline decodes
+    # each photo once and times decoding apart from detection. Remote detectors
+    # (Gemini, Roboflow) only implement `detect`.
+
     def is_loaded(self) -> bool: ...

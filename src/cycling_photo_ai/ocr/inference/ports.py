@@ -1,6 +1,6 @@
 """OCR inference ports — abstract interface for bib readers.
 
-Concrete implementations: PARSeqReader, PpOcrReader.
+Concrete implementations: PARSeqReader, TrOCRBibReader.
 """
 
 from __future__ import annotations
@@ -22,6 +22,10 @@ class BibReading:
     rejection_reason: str | None = None
     preprocessing_applied: list[str] | None = None
     raw_text: str | None = None
+    # Min probability over the digit steps only, no end-of-sequence step and no
+    # temperature scaling. Same definition for every reader, so abstention
+    # thresholds are comparable across them. None for readers that lack it.
+    confidence_uncalibrated: float | None = None
 
 
 @runtime_checkable

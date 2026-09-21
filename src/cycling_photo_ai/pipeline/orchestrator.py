@@ -19,16 +19,19 @@ _COLOR_WORKERS = int(os.environ.get("COLOR_PARALLEL_WORKERS", "4"))
 import cv2
 import numpy as np
 import requests
+from PIL import Image, ImageOps
 
 from cycling_photo_ai.color.strategies.base import ColorAnalysisStrategy
 from cycling_photo_ai.detection.inference.ports import IDetector
 from cycling_photo_ai.ocr.inference.ports import IBibReader
+from cycling_photo_ai.ocr.inference.preprocessing import preprocess_crop
 from cycling_photo_ai.pipeline.schemas import CropUploadUrls
 
 COLOR_REGIONS = ("helmet", "cyclist_clothes", "bicycle")
 COLOR_PADDING_RATIO = 0.08
 CROP_UPLOAD_TIMEOUT_S = 30
 CROP_UPLOAD_JPEG_QUALITY = 85
+OCR_PREPROCESS_MODES = ("legacy", "on", "off")
 
 
 def _upload_crop(crop: np.ndarray, url: str | None) -> tuple[str | None, str | None]:
@@ -78,11 +81,20 @@ class PipelineResult:
     image_width: int = 0
     image_height: int = 0
     processing_ms: float = 0.0
+    decode_ms: float = 0.0
     detection_ms: float = 0.0
+    preprocess_ms: float = 0.0
     ocr_ms: float = 0.0
     color_ms: float = 0.0
     stage_results: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)  # deprecated — use stage_results
+
+
+def _load_image(image_path: str) -> tuple[Image.Image, np.ndarray]:
+    """Decode once. Returns the EXIF-corrected RGB image for the detector and
+    the same pixels as a BGR array for cropping."""
+    pil_image = ImageOps.exif_transpose(Image.open(image_path)).convert("RGB")
+    return pil_image, np.ascontiguousarray(np.asarray(pil_image)[:, :, ::-1])
 
 
 def _crop_with_padding(
@@ -120,6 +132,7 @@ class PipelineOrchestrator:
         color_strategy: ColorAnalysisStrategy | None = None,
         bib_padding_ratio: float = 0.12,
         confidence_threshold: float = 0.25,
+        ocr_preprocess: str | None = None,
     ) -> None:
         self._detector = detector
         self._bib_reader = bib_reader
@@ -127,10 +140,27 @@ class PipelineOrchestrator:
         self._padding_ratio = bib_padding_ratio
         self._confidence_threshold = confidence_threshold
 
+        # Crop preprocessing (CLAHE / denoise gates, ADR-010) lives here so every
+        # reader gets the same crop. "legacy" keeps each reader's historical
+        # behaviour (TrOCR preprocessed, PARSeq did not); "on" / "off" force
+        # the same choice on all of them.
+        mode = ocr_preprocess or os.environ.get("OCR_PREPROCESS", "legacy")
+        if mode not in OCR_PREPROCESS_MODES:
+            raise ValueError(f"OCR_PREPROCESS={mode!r}. Expected one of {OCR_PREPROCESS_MODES}")
+        self.ocr_preprocess_mode = mode
+        self._preprocess_crops = mode == "on" or (
+            mode == "legacy" and getattr(bib_reader, "PREPROCESS_BY_DEFAULT", False)
+        )
+        if hasattr(bib_reader, "apply_preprocessing"):
+            bib_reader.apply_preprocessing = False
+
     def process(
         self,
         image_path: str,
         crop_upload_urls: CropUploadUrls | None = None,
+        confidence_threshold: float | None = None,
+        ocr_threshold: float | None = None,
+        max_bibs: int | None = None,
     ) -> PipelineResult:
         """Run full pipeline on one image.
 
@@ -142,21 +172,41 @@ class PipelineOrchestrator:
         signed PUT URL; the resulting bucket path is attached to the corresponding
         bib/color dict as `crop_path`. Failures are reported in stage_results.notes
         but never abort the pipeline (degradación grácil).
+
+        `confidence_threshold` overrides the detection floor for this call.
+        `ocr_threshold` overrides the readers' abstention threshold (0 keeps
+        every reading). `max_bibs` caps the competidor_number boxes sent to
+        OCR, highest confidence first. All default to the historical behaviour.
         """
         start = time.perf_counter()
         errors: list[str] = []
         ocr_ms_total = 0.0
+        preprocess_ms_total = 0.0
         color_ms_total = 0.0
         stage_results: list[dict] = []
+        det_threshold = (
+            self._confidence_threshold if confidence_threshold is None else confidence_threshold
+        )
+
+        # Step 0 — Decode once, EXIF-corrected. The detector and the crops share
+        # these pixels, and decoding is timed apart from detection.
+        decode_start = time.perf_counter()
+        pil_image: Image.Image | None = None
+        image: np.ndarray | None = None
+        try:
+            pil_image, image = _load_image(image_path)
+        except Exception as e:
+            errors.append(f"Failed to read image: {image_path}: {e}")
+        decode_ms = (time.perf_counter() - decode_start) * 1000
 
         # Step 1 — Detection
         det_start = time.perf_counter()
-        raw_detections = self._detector.detect(image_path)
+        if pil_image is not None and hasattr(self._detector, "detect_image"):
+            raw_detections = self._detector.detect_image(pil_image, conf=det_threshold)
+        else:
+            raw_detections = self._detector.detect(image_path)
         detection_ms = (time.perf_counter() - det_start) * 1000
-        detections = [
-            d for d in raw_detections
-            if d.confidence >= self._confidence_threshold
-        ]
+        detections = [d for d in raw_detections if d.confidence >= det_threshold]
         det_notes: list[str] = []
         if not detections:
             det_notes.append("no_detections_above_threshold")
@@ -183,17 +233,8 @@ class PipelineOrchestrator:
         img_width = 0
         img_height = 0
 
-        # Load image once if any cropping work needed
-        needs_image = self._bib_reader is not None or self._color_strategy is not None
-        image: np.ndarray | None = None
-        if needs_image:
-            import cv2
-
-            image = cv2.imread(image_path)
-            if image is None:
-                errors.append(f"Failed to read image: {image_path}")
-            else:
-                img_height, img_width = image.shape[:2]
+        if image is not None:
+            img_height, img_width = image.shape[:2]
 
         if image is None:
             # Both OCR and color are unable to run — emit failed stage results
@@ -219,6 +260,9 @@ class PipelineOrchestrator:
         if image is not None:
             # Step 2 — OCR for competidor_number bboxes
             ocr_targets = [d for d in detections if d.class_name == "competidor_number"]
+            if max_bibs is not None and len(ocr_targets) > max_bibs:
+                ocr_targets = sorted(ocr_targets, key=lambda d: d.confidence, reverse=True)
+                ocr_targets = ocr_targets[:max_bibs]
             ocr_processed = 0
             ocr_succeeded = 0
             ocr_failed = 0
@@ -237,9 +281,15 @@ class PipelineOrchestrator:
                         errors.append(f"ocr crop failed for bbox {det.bbox}")
                         continue
                     crop, _abs = crop_data
+                    pre_t0 = time.perf_counter()
+                    reader_input, preprocessing_applied = (
+                        preprocess_crop(crop) if self._preprocess_crops else (crop, [])
+                    )
+                    pre_item_ms = (time.perf_counter() - pre_t0) * 1000
+                    preprocess_ms_total += pre_item_ms
                     ocr_t0 = time.perf_counter()
                     try:
-                        reading = self._bib_reader.read(crop)
+                        reading = self._bib_reader.read(reader_input)
                     except Exception as e:
                         ocr_item_ms = (time.perf_counter() - ocr_t0) * 1000
                         ocr_ms_total += ocr_item_ms
@@ -249,6 +299,15 @@ class PipelineOrchestrator:
                         continue
                     ocr_item_ms = (time.perf_counter() - ocr_t0) * 1000
                     ocr_ms_total += ocr_item_ms
+                    status, rejection_reason = reading.status, reading.rejection_reason
+                    if ocr_threshold is not None:
+                        if not reading.digits:
+                            status, rejection_reason = "abstained", "empty_prediction"
+                        elif reading.confidence < ocr_threshold:
+                            status = "abstained"
+                            rejection_reason = f"low_confidence_{reading.confidence:.2f}"
+                        else:
+                            status, rejection_reason = "read", None
                     # Crop upload (after successful OCR; URL may be missing on overflow)
                     crop_path: str | None = None
                     if crop_upload_urls is not None and idx < len(bib_url_list):
@@ -258,17 +317,20 @@ class PipelineOrchestrator:
                     bib_readings.append({
                         "digits": reading.digits,
                         "confidence": reading.confidence,
+                        "confidence_uncalibrated": reading.confidence_uncalibrated,
                         "confidence_per_digit": reading.confidence_per_digit,
-                        "status": reading.status,
-                        "rejection_reason": reading.rejection_reason,
-                        "preprocessing_applied": reading.preprocessing_applied or [],
+                        "status": status,
+                        "rejection_reason": rejection_reason,
+                        "preprocessing_applied": preprocessing_applied,
                         "bbox_source": list(det.bbox),
+                        "bbox_confidence": det.confidence,
                         "raw_ocr_text": reading.raw_text,
                         "processing_ms": round(ocr_item_ms, 2),
+                        "preprocess_ms": round(pre_item_ms, 2),
                         "crop_path": crop_path,
                     })
                     ocr_succeeded += 1
-                    if reading.status == "abstained":
+                    if status == "abstained":
                         ocr_abstained += 1
 
             # Finalize OCR stage result
@@ -435,7 +497,9 @@ class PipelineOrchestrator:
             image_width=img_width,
             image_height=img_height,
             processing_ms=round(elapsed_ms, 2),
+            decode_ms=round(decode_ms, 2),
             detection_ms=round(detection_ms, 2),
+            preprocess_ms=round(preprocess_ms_total, 2),
             ocr_ms=round(ocr_ms_total, 2),
             color_ms=round(color_ms_total, 2),
             stage_results=stage_results,

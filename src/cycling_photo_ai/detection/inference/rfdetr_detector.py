@@ -99,14 +99,22 @@ class RfdetrDetector:
         )
 
     def detect(self, image_path: str) -> list[Detection]:
-        if self._model is None:
-            self._load()
-
         # Respect EXIF orientation (Sony A7S III + others store rotation tag).
         # Without exif_transpose, vertical photos arrive sideways and detector
         # accuracy collapses (discovered ADR-016 eval, 2026-05-02).
         image = Image.open(image_path)
         image = ImageOps.exif_transpose(image).convert("RGB")
+        return self.detect_image(image)
+
+    def detect_image(self, image: Image.Image, conf: float | None = None) -> list[Detection]:
+        """Detect on a decoded, EXIF-corrected RGB image.
+
+        `conf` is accepted for parity with YoloDetector and ignored: every
+        query is returned (threshold=0.0) and the caller filters.
+        """
+        if self._model is None:
+            self._load()
+
         img_w, img_h = image.size
 
         # predict() returns sv.Detections with xyxy (pixel), confidence, class_id

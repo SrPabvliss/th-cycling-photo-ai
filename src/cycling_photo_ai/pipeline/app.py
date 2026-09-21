@@ -14,8 +14,12 @@ or via env defaults:
 
 from __future__ import annotations
 
+import hashlib
+import itertools
 import os
+import subprocess
 import tempfile
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -55,6 +59,12 @@ AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy")
 AVAILABLE_OCRS = ("parseq", "trocr")
 AVAILABLE_COLORS = ("gemini", "none")
 
+# Identify this process and count the requests it served per detector/ocr pair,
+# so latency studies can drop the cold-start ones.
+CONTAINER_ID = uuid.uuid4().hex[:12]
+_request_counters: dict[tuple[str, str], itertools.count] = {}
+_weights_sha256: dict[str, str] = {}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -82,6 +92,10 @@ async def lifespan(app: FastAPI):
         color._load()
     print(f"[lifespan] Color ready: {DEFAULT_COLOR}", flush=True)
 
+    if os.environ.get("WARMUP_INFERENCE", "0") == "1":
+        _run_warmup_inference(detector, reader)
+        print("[lifespan] Warm-up inference done.", flush=True)
+
     print("[lifespan] All models warm.", flush=True)
 
     yield
@@ -97,6 +111,19 @@ app = FastAPI(
     version="0.4.0",
     lifespan=lifespan,
 )
+
+
+def _run_warmup_inference(detector: IDetector, reader: IBibReader) -> None:
+    """One throwaway inference per model: CUDA kernels and allocator warm up here,
+    not inside the first real request."""
+    import numpy as np
+    from PIL import Image
+
+    rng = np.random.default_rng(0)
+    if hasattr(detector, "detect_image"):
+        noise = rng.integers(0, 255, size=(1920, 1280, 3), dtype=np.uint8)
+        detector.detect_image(Image.fromarray(noise))
+    reader.read(rng.integers(0, 255, size=(96, 240, 3), dtype=np.uint8))
 
 
 def _get_detector(detector_type: str = DEFAULT_DETECTOR) -> IDetector:
@@ -206,15 +233,30 @@ async def pipeline(
         default=DEFAULT_COLOR,
         description="Color strategy backend (gemini | none)",
     ),
+    ocr_threshold: float | None = Query(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Overrides the readers' abstention threshold. 0 keeps every reading.",
+    ),
+    max_bibs: int | None = Query(
+        default=None,
+        ge=1,
+        description="Cap on competidor_number boxes sent to OCR, highest confidence first.",
+    ),
 ) -> Any:
     """Full detection→crop→{OCR, color} pipeline. Backends selectable via query."""
     orch = _get_orchestrator(detector, ocr, color)
+    request_seq = next(_request_counters.setdefault((detector, ocr), itertools.count(1)))
 
     image_path = await _resolve_image(request.image_url)
     try:
         result = orch.process(
             image_path=image_path,
             crop_upload_urls=request.crop_upload_urls,
+            confidence_threshold=request.confidence_threshold,
+            ocr_threshold=ocr_threshold,
+            max_bibs=max_bibs,
         )
     finally:
         if image_path != request.image_url:
@@ -230,12 +272,21 @@ async def pipeline(
         processing_ms=result.processing_ms,
         timings=StageTimings(
             total_ms=result.processing_ms,
+            decode_ms=result.decode_ms,
             detection_ms=result.detection_ms,
+            preprocess_ms=result.preprocess_ms,
             ocr_ms=result.ocr_ms,
             color_ms=result.color_ms,
         ),
         stage_results=[StageResult(**sr) for sr in result.stage_results],
         model_versions={"detection": detector, "ocr": ocr, "color": color},
+        runtime={"container_id": CONTAINER_ID, "request_seq": request_seq},
+        params={
+            "confidence_threshold": request.confidence_threshold,
+            "ocr_threshold": ocr_threshold,
+            "max_bibs": max_bibs,
+            "ocr_preprocess": orch.ocr_preprocess_mode,
+        },
     )
 
 
@@ -327,6 +378,88 @@ async def detect(model_id: str, request: PipelineRequest) -> Any:
             for d in filtered
         ],
         "inference_ms": round(elapsed_ms, 2),
+    }
+
+
+def _sha256(path: Path) -> str:
+    key = str(path)
+    if key not in _weights_sha256:
+        digest = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
+        _weights_sha256[key] = digest.hexdigest()
+    return _weights_sha256[key]
+
+
+def _weights_files() -> dict[str, Path]:
+    """The weight file each loaded model reads, keyed like the query values."""
+    files: dict[str, Path] = {}
+    for name, det in _detectors.items():
+        files[name] = Path(det._weights_path)
+    for name, reader in _bib_readers.items():
+        path = Path(reader._weights_path)
+        files[f"ocr:{name}"] = path / "model.safetensors" if path.is_dir() else path
+    return files
+
+
+def _git_commit() -> str | None:
+    if os.environ.get("AI_GIT_COMMIT"):
+        return os.environ["AI_GIT_COMMIT"]
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5, cwd=Path(__file__).parent,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
+@app.get("/meta")
+async def meta() -> dict[str, Any]:
+    """Everything needed to reproduce a run: code, libraries, hardware, weights.
+
+    Weights are reported for the models loaded so far, so call it after the
+    first request (or after warm-up) of the pair under study.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    import torch
+
+    libraries: dict[str, str | None] = {}
+    packages = (
+        "torch", "torchvision", "ultralytics", "rfdetr", "transformers", "timm",
+        "pillow", "opencv-python-headless", "numpy",
+    )
+    for package in packages:
+        try:
+            libraries[package] = version(package)
+        except PackageNotFoundError:
+            libraries[package] = None
+
+    cuda = torch.cuda.is_available()
+    return {
+        "container_id": CONTAINER_ID,
+        "git_commit": _git_commit(),
+        "libraries": libraries,
+        "device": {
+            "cuda": cuda,
+            "gpu": torch.cuda.get_device_name(0) if cuda else None,
+            "cuda_version": torch.version.cuda,
+        },
+        "weights": {
+            name: {"path": str(path), "sha256": _sha256(path) if path.exists() else None}
+            for name, path in _weights_files().items()
+        },
+        "defaults": {
+            "detector": DEFAULT_DETECTOR,
+            "ocr": DEFAULT_OCR,
+            "color": DEFAULT_COLOR,
+            "ocr_preprocess": os.environ.get("OCR_PREPROCESS", "legacy"),
+            "ocr_confidence_threshold": os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"),
+            "ocr_device": os.environ.get("OCR_DEVICE"),
+        },
     }
 
 

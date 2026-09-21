@@ -28,6 +28,9 @@ if TYPE_CHECKING:
 class PARSeqReader:
     """PARSeq-base 4-phase bib reader (Run 14 best model, 98.7% EM@80%)."""
 
+    # See TrOCRBibReader.PREPROCESS_BY_DEFAULT.
+    PREPROCESS_BY_DEFAULT = False
+
     def __init__(self, weights_dir: str | Path | None = None, device: str | None = None) -> None:
         d = weights_dir or os.environ.get("PARSEQ_WEIGHTS", str(WEIGHTS_DIR / "parseq_4phase"))
         self._weights_dir = Path(d)
@@ -143,6 +146,8 @@ class PARSeqReader:
         return BibReading(
             digits=digits,
             confidence=overall_conf,
+            # Already min over digit steps, uncalibrated: same value by definition.
+            confidence_uncalibrated=overall_conf,
             confidence_per_digit=per_digit,
             status=status,
             rejection_reason=rejection_reason,

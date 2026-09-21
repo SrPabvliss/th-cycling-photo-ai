@@ -63,16 +63,26 @@ class YoloDetector:
         self._model = YOLO(self._weights_path)
 
     def detect(self, image_path: str) -> list[Detection]:
-        if self._model is None:
-            self._load()
-
         # Respect EXIF orientation (Sony A7S III + others store rotation tag).
         # Without exif_transpose, vertical photos arrive sideways and detector
         # accuracy collapses.
         img = Image.open(image_path)
         img = ImageOps.exif_transpose(img).convert("RGB")
+        return self.detect_image(img)
 
-        results = self._model(img, verbose=False)
+    def detect_image(self, img: Image.Image, conf: float | None = None) -> list[Detection]:
+        """Detect on a decoded, EXIF-corrected RGB image.
+
+        `conf` overrides ultralytics' own confidence floor (0.25 by default),
+        which otherwise drops boxes before the caller's threshold is applied.
+        """
+        if self._model is None:
+            self._load()
+
+        if conf is None:
+            results = self._model(img, verbose=False)
+        else:
+            results = self._model(img, conf=conf, verbose=False)
         detections: list[Detection] = []
 
         for result in results:

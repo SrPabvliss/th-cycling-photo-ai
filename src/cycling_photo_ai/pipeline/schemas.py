@@ -47,13 +47,16 @@ class BibReadingItem(BaseModel):
 
     digits: str
     confidence: float = Field(ge=0.0, le=1.0)
+    confidence_uncalibrated: float | None = Field(default=None, ge=0.0, le=1.0, description="Min probability over the digit steps only (no end-of-sequence step, no temperature). Same definition for every reader, so thresholds are comparable across them.")
     confidence_per_digit: list[float] = []
     status: str = Field(description="read | abstained")
     rejection_reason: str | None = None
     preprocessing_applied: list[str] = []
     bbox_source: list[float] = Field(default=[], description="Detection bbox that produced this crop")
+    bbox_confidence: float | None = Field(default=None, description="Confidence of the detection that produced this crop")
     raw_ocr_text: str | None = None
-    processing_ms: float = Field(default=0.0, description="Wall-clock ms spent on this single OCR call (orchestrator-measured)")
+    processing_ms: float = Field(default=0.0, description="Wall-clock ms spent on this single OCR call (orchestrator-measured). Reader only: crop preprocessing is in preprocess_ms.")
+    preprocess_ms: float = Field(default=0.0, description="Wall-clock ms spent on conditional crop preprocessing before this OCR call")
     crop_path: str | None = Field(default=None, description="Bucket path where this bib's crop was uploaded (None if upload was disabled, failed, or overflowed MAX_PER_TYPE)")
 
 
@@ -100,7 +103,9 @@ class StageTimings(BaseModel):
     """
 
     total_ms: float = Field(description="Full pipeline wall-clock ms (= PipelineResponse.processing_ms)")
-    detection_ms: float = Field(default=0.0, description="Detection stage ms (single call)")
+    decode_ms: float = Field(default=0.0, description="Image decode + EXIF orientation ms. Not part of detection_ms.")
+    detection_ms: float = Field(default=0.0, description="Detection stage ms (single call): detector preprocessing, inference and postprocessing on the decoded image")
+    preprocess_ms: float = Field(default=0.0, description="Crop preprocessing ms (sum of per-item BibReadingItem.preprocess_ms)")
     ocr_ms: float = Field(default=0.0, description="OCR stage ms (sum of per-item BibReadingItem.processing_ms)")
     color_ms: float = Field(default=0.0, description="Color stage ms (sum of per-item ColorAnalysisItem.processing_ms)")
 
@@ -119,6 +124,8 @@ class PipelineResponse(BaseModel):
     timings: StageTimings = Field(default_factory=lambda: StageTimings(total_ms=0.0))
     stage_results: list[StageResult] = Field(default_factory=list, description="Per-stage execution outcomes — replacement for the legacy `errors` field below")
     model_versions: dict[str, str] = {}
+    runtime: dict[str, str | int] = Field(default_factory=dict, description="container_id and request_seq (requests served by this container for this detector/ocr pair, 1-based). Lets a caller discard cold-start requests from latency statistics.")
+    params: dict[str, str | float | int | None] = Field(default_factory=dict, description="Effective parameters of this call: detection threshold, OCR abstention threshold, max_bibs, OCR preprocessing mode")
 
 
 class HealthResponse(BaseModel):

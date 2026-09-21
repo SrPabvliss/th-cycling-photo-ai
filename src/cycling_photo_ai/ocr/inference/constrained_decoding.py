@@ -76,7 +76,11 @@ class DigitOnlyLogitsProcessor:
         Returns:
             Modified scores with disallowed positions set to ``-inf``.
         """
-        mask = self._mask.to(scores.device)
+        # Move once: a host→device copy of the full-vocabulary mask on every
+        # decoding step would be charged to the reader's latency on GPU.
+        if self._mask.device != scores.device:
+            self._mask = self._mask.to(scores.device)
+        mask = self._mask
         result = scores.clone()
         result[:, ~mask] = float("-inf")
         return result
