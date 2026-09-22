@@ -8,8 +8,9 @@ the four combinations comparable:
 - One image for every run, with every library pinned to the versions the four
   models were verified with locally (uv.lock, 2026-09-21), `rfdetr` included.
 - The four weights are mounted, TrOCR pointing at the 4-phase model.
-- One request at a time per container: a photo never shares the GPU with
-  another one, so stage timings are clean. Throughput comes from containers.
+- Accuracy runs overlap EVAL_CONCURRENT requests per container (download
+  bound). The timing pass (EVAL_TIMING=1) keeps one request at a time so stage
+  timings are clean.
 - The pair under study is loaded and warmed up at start (WARMUP_INFERENCE=1).
 - The commit is injected so /meta can report it.
 
@@ -51,6 +52,12 @@ MAX_CONTAINERS = int(os.environ.get("EVAL_MAX_CONTAINERS", "4"))
 TIMING = os.environ.get("EVAL_TIMING", "0") == "1"
 if TIMING:
     MAX_CONTAINERS = 1
+# Requests in flight per container. The accuracy runs overlap several so the
+# GPU is not idle while a photo downloads; the timing pass keeps 1 so stage
+# timings are clean. Photos are 4 MB and compute is ~0.5 s: at 1 in flight the
+# container was idle three quarters of the time and billed for all of it.
+CONCURRENT = 1 if TIMING else int(os.environ.get("EVAL_CONCURRENT", "4"))
+CPU = 4.0 if TIMING else float(os.environ.get("EVAL_CPU", "2"))
 
 
 def _local_commit() -> str:
@@ -138,14 +145,14 @@ volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=F
     # Decoding the JPEG and the detector's resize run on CPU. A fixed quota
     # keeps that part equal across the four runs instead of whatever share the
     # host happens to give.
-    cpu=4.0,
-    memory=16384,
+    cpu=CPU,
+    memory=16384 if TIMING else 8192,
     volumes={"/vol": volume},
     scaledown_window=1800 if TIMING else 300,
     max_containers=MAX_CONTAINERS,
     timeout=300,
 )
-@modal.concurrent(max_inputs=1)
+@modal.concurrent(max_inputs=CONCURRENT)
 @modal.asgi_app()
 def api():
     import threading
