@@ -96,6 +96,19 @@ async def lifespan(app: FastAPI):
         _run_warmup_inference(detector, reader)
         print("[lifespan] Warm-up inference done.", flush=True)
 
+    # Timing studies load every local detector/reader pair in one process so
+    # the four combinations are measured on the same host.
+    if os.environ.get("WARMUP_ALL", "0") == "1":
+        for det_name in ("yolo", "rfdetr_v3"):
+            for ocr_name in AVAILABLE_OCRS:
+                det, rd = _get_detector(det_name), _get_bib_reader(ocr_name)
+                if not det.is_loaded():
+                    det._load()
+                if not rd.is_loaded():
+                    rd._load()
+                _run_warmup_inference(det, rd)
+        print("[lifespan] All four pairs warm.", flush=True)
+
     print("[lifespan] All models warm.", flush=True)
 
     yield

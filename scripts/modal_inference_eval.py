@@ -46,6 +46,11 @@ DETECTOR = os.environ.get("EVAL_DETECTOR", "yolo")
 OCR = os.environ.get("EVAL_OCR", "parseq")
 OCR_PREPROCESS = os.environ.get("EVAL_OCR_PREPROCESS", "off")
 MAX_CONTAINERS = int(os.environ.get("EVAL_MAX_CONTAINERS", "4"))
+# EVAL_TIMING=1: one container, the four pairs loaded and warm, for the
+# controlled latency pass (same host for every combination).
+TIMING = os.environ.get("EVAL_TIMING", "0") == "1"
+if TIMING:
+    MAX_CONTAINERS = 1
 
 
 def _local_commit() -> str:
@@ -101,6 +106,7 @@ image = (
             "OCR_DEVICE": "cuda",
             "OCR_PREPROCESS": OCR_PREPROCESS,
             "WARMUP_INFERENCE": "1",
+            "WARMUP_ALL": "1" if TIMING else "0",
             "AI_GIT_COMMIT": _local_commit(),
             "YOLO_WEIGHTS": "/vol/weights/yolo11m_v3cleaned/best.pt",
             "RFDETR_WEIGHTS": "/vol/weights/rfdetr_v3cleaned/best.pth",
@@ -118,7 +124,9 @@ image = (
 # Short name: Modal builds the hostname as <workspace>--<app>-<function>, and a
 # DNS label longer than 63 characters gets truncated into an unreachable host.
 app = modal.App(
-    f"eval-{DETECTOR.split('_')[0]}-{OCR}" + ("-pre" if OCR_PREPROCESS == "on" else ""),
+    "eval-timing"
+    if TIMING
+    else f"eval-{DETECTOR.split('_')[0]}-{OCR}" + ("-pre" if OCR_PREPROCESS == "on" else ""),
     image=image,
 )
 
@@ -133,7 +141,7 @@ volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=F
     cpu=4.0,
     memory=16384,
     volumes={"/vol": volume},
-    scaledown_window=300,
+    scaledown_window=1800 if TIMING else 300,
     max_containers=MAX_CONTAINERS,
     timeout=300,
 )
