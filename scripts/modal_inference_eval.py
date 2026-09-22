@@ -112,7 +112,9 @@ image = (
     .add_local_python_source("cycling_photo_ai")
 )
 
-app = modal.App(f"cycling-photo-ai-eval-{DETECTOR.replace('_', '-')}-{OCR}", image=image)
+# Short name: Modal builds the hostname as <workspace>--<app>-<function>, and a
+# DNS label longer than 63 characters gets truncated into an unreachable host.
+app = modal.App(f"eval-{DETECTOR.split('_')[0]}-{OCR}", image=image)
 
 volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=False)
 
@@ -126,7 +128,7 @@ volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=F
 )
 @modal.concurrent(max_inputs=1)
 @modal.asgi_app()
-def fastapi_app():
+def api():
     from cycling_photo_ai.pipeline.app import app as inner_app
 
     return inner_app
