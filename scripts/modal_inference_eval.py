@@ -121,6 +121,11 @@ volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=F
 
 @app.function(
     gpu="L4",
+    # Decoding the JPEG and the detector's resize run on CPU. A fixed quota
+    # keeps that part equal across the four runs instead of whatever share the
+    # host happens to give.
+    cpu=4.0,
+    memory=16384,
     volumes={"/vol": volume},
     scaledown_window=300,
     max_containers=MAX_CONTAINERS,
