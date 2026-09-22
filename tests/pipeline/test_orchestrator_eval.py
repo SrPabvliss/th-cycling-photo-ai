@@ -147,3 +147,14 @@ def test_timings_are_reported_apart(flat_image):
     reading = result.bib_readings[0]
     assert {"processing_ms", "preprocess_ms"} <= reading.keys()
     assert result.processing_ms >= result.detection_ms + result.ocr_ms
+
+
+def test_bib_padding_can_be_overridden_per_call(flat_image):
+    detector = FakeDetector([_bib(0.9)])
+    reader = FakeReader()
+    orch = PipelineOrchestrator(detector, reader)
+    orch.process("/fake.jpg")
+    orch.process("/fake.jpg", bib_padding_ratio=0.30)
+    default_crop, wide_crop = reader.crops
+    assert wide_crop.shape[0] > default_crop.shape[0]
+    assert wide_crop.shape[1] > default_crop.shape[1]

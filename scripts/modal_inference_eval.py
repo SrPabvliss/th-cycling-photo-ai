@@ -114,7 +114,10 @@ image = (
 
 # Short name: Modal builds the hostname as <workspace>--<app>-<function>, and a
 # DNS label longer than 63 characters gets truncated into an unreachable host.
-app = modal.App(f"eval-{DETECTOR.split('_')[0]}-{OCR}", image=image)
+app = modal.App(
+    f"eval-{DETECTOR.split('_')[0]}-{OCR}" + ("-pre" if OCR_PREPROCESS == "on" else ""),
+    image=image,
+)
 
 volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=False)
 

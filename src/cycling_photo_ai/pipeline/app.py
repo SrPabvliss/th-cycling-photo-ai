@@ -244,6 +244,12 @@ async def pipeline(
         ge=1,
         description="Cap on competidor_number boxes sent to OCR, highest confidence first.",
     ),
+    bib_padding: float | None = Query(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Crop margin around the bib box as a fraction of its size (default 0.12).",
+    ),
 ) -> Any:
     """Full detection→crop→{OCR, color} pipeline. Backends selectable via query."""
     orch = _get_orchestrator(detector, ocr, color)
@@ -257,6 +263,7 @@ async def pipeline(
             confidence_threshold=request.confidence_threshold,
             ocr_threshold=ocr_threshold,
             max_bibs=max_bibs,
+            bib_padding_ratio=bib_padding,
         )
     finally:
         if image_path != request.image_url:
@@ -285,6 +292,7 @@ async def pipeline(
             "confidence_threshold": request.confidence_threshold,
             "ocr_threshold": ocr_threshold,
             "max_bibs": max_bibs,
+            "bib_padding": bib_padding if bib_padding is not None else orch._padding_ratio,
             "ocr_preprocess": orch.ocr_preprocess_mode,
         },
     )

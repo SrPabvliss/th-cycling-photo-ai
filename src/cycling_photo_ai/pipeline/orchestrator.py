@@ -161,6 +161,7 @@ class PipelineOrchestrator:
         confidence_threshold: float | None = None,
         ocr_threshold: float | None = None,
         max_bibs: int | None = None,
+        bib_padding_ratio: float | None = None,
     ) -> PipelineResult:
         """Run full pipeline on one image.
 
@@ -176,7 +177,8 @@ class PipelineOrchestrator:
         `confidence_threshold` overrides the detection floor for this call.
         `ocr_threshold` overrides the readers' abstention threshold (0 keeps
         every reading). `max_bibs` caps the competidor_number boxes sent to
-        OCR, highest confidence first. All default to the historical behaviour.
+        OCR, highest confidence first. `bib_padding_ratio` overrides the crop
+        margin around the bib box. All default to the historical behaviour.
         """
         start = time.perf_counter()
         errors: list[str] = []
@@ -187,6 +189,7 @@ class PipelineOrchestrator:
         det_threshold = (
             self._confidence_threshold if confidence_threshold is None else confidence_threshold
         )
+        padding = self._padding_ratio if bib_padding_ratio is None else bib_padding_ratio
 
         # Step 0 — Decode once, EXIF-corrected. The detector and the crops share
         # these pixels, and decoding is timed apart from detection.
@@ -274,7 +277,7 @@ class PipelineOrchestrator:
             if self._bib_reader is not None:
                 for idx, det in enumerate(ocr_targets):
                     ocr_processed += 1
-                    crop_data = _crop_with_padding(image, det.bbox, self._padding_ratio)
+                    crop_data = _crop_with_padding(image, det.bbox, padding)
                     if crop_data is None:
                         ocr_failed += 1
                         ocr_notes.append("crop_failed:competidor_number")
