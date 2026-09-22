@@ -250,10 +250,17 @@ async def pipeline(
         le=1.0,
         description="Crop margin around the bib box as a fraction of its size (default 0.12).",
     ),
+    crop_dir: str | None = Query(
+        default=None,
+        pattern=r"^[A-Za-z0-9_./-]{1,120}$",
+        description="Keep the bib crops under CROP_SAVE_ROOT/<crop_dir>/ (evaluation deployments only).",
+    ),
 ) -> Any:
     """Full detection→crop→{OCR, color} pipeline. Backends selectable via query."""
     orch = _get_orchestrator(detector, ocr, color)
     request_seq = next(_request_counters.setdefault((detector, ocr), itertools.count(1)))
+    if crop_dir and (".." in crop_dir or crop_dir.startswith("/")):
+        raise ValueError("crop_dir must be a relative path without '..'")
 
     image_path = await _resolve_image(request.image_url)
     try:
@@ -264,6 +271,8 @@ async def pipeline(
             ocr_threshold=ocr_threshold,
             max_bibs=max_bibs,
             bib_padding_ratio=bib_padding,
+            crop_dir=crop_dir,
+            crop_name=request.image_id,
         )
     finally:
         if image_path != request.image_url:

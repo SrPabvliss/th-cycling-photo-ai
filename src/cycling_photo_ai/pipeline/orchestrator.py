@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from urllib.parse import urlparse
@@ -32,6 +33,9 @@ COLOR_PADDING_RATIO = 0.08
 CROP_UPLOAD_TIMEOUT_S = 30
 CROP_UPLOAD_JPEG_QUALITY = 85
 OCR_PREPROCESS_MODES = ("legacy", "on", "off")
+# Directory where bib crops are kept when a caller asks for it (`crop_dir`).
+# Set on the evaluation deployment to a mounted volume; unset in production.
+CROP_SAVE_ROOT = os.environ.get("CROP_SAVE_ROOT")
 
 
 def _upload_crop(crop: np.ndarray, url: str | None) -> tuple[str | None, str | None]:
@@ -88,6 +92,19 @@ class PipelineResult:
     color_ms: float = 0.0
     stage_results: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)  # deprecated — use stage_results
+
+
+def _save_crop(crop: np.ndarray, crop_dir: str, stem: str, idx: int) -> str | None:
+    """Write a reader input crop under CROP_SAVE_ROOT; returns the path relative to
+    the root, or None if it could not be written. Never raises."""
+    try:
+        rel = Path(crop_dir) / f"{stem}_{idx}.jpg"
+        out = Path(CROP_SAVE_ROOT) / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(out), crop, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+        return str(rel)
+    except Exception:
+        return None
 
 
 def _load_image(image_path: str) -> tuple[Image.Image, np.ndarray]:
@@ -162,6 +179,8 @@ class PipelineOrchestrator:
         ocr_threshold: float | None = None,
         max_bibs: int | None = None,
         bib_padding_ratio: float | None = None,
+        crop_dir: str | None = None,
+        crop_name: str | None = None,
     ) -> PipelineResult:
         """Run full pipeline on one image.
 
@@ -178,7 +197,10 @@ class PipelineOrchestrator:
         `ocr_threshold` overrides the readers' abstention threshold (0 keeps
         every reading). `max_bibs` caps the competidor_number boxes sent to
         OCR, highest confidence first. `bib_padding_ratio` overrides the crop
-        margin around the bib box. All default to the historical behaviour.
+        margin around the bib box. With `crop_dir` (and CROP_SAVE_ROOT set) the
+        bib crops sent to the reader are written to disk after the OCR timer
+        stops, as `<root>/<crop_dir>/<crop_name or image stem>_<idx>.jpg`.
+        All default to the historical behaviour.
         """
         start = time.perf_counter()
         errors: list[str] = []
@@ -313,6 +335,8 @@ class PipelineOrchestrator:
                             status, rejection_reason = "read", None
                     # Crop upload (after successful OCR; URL may be missing on overflow)
                     crop_path: str | None = None
+                    if crop_dir and CROP_SAVE_ROOT:
+                        crop_path = _save_crop(reader_input, crop_dir, crop_name or Path(image_path).stem, idx)
                     if crop_upload_urls is not None and idx < len(bib_url_list):
                         crop_path, upload_reason = _upload_crop(crop, bib_url_list[idx])
                         if upload_reason is not None:

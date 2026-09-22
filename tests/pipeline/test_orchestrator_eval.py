@@ -158,3 +158,20 @@ def test_bib_padding_can_be_overridden_per_call(flat_image):
     default_crop, wide_crop = reader.crops
     assert wide_crop.shape[0] > default_crop.shape[0]
     assert wide_crop.shape[1] > default_crop.shape[1]
+
+
+def test_crops_are_saved_when_asked(flat_image, tmp_path, monkeypatch):
+    monkeypatch.setattr("cycling_photo_ai.pipeline.orchestrator.CROP_SAVE_ROOT", str(tmp_path))
+    orch = PipelineOrchestrator(FakeDetector([_bib(0.9), _bib(0.5, x1=0.5)]), FakeReader())
+    result = orch.process("/fake.jpg", crop_dir="run7", crop_name="photo-a")
+    paths = [b["crop_path"] for b in result.bib_readings]
+    assert paths == ["run7/photo-a_0.jpg", "run7/photo-a_1.jpg"]
+    assert all((tmp_path / p).stat().st_size > 0 for p in paths)
+
+
+def test_crops_are_not_saved_without_a_root(flat_image, monkeypatch):
+    monkeypatch.setattr("cycling_photo_ai.pipeline.orchestrator.CROP_SAVE_ROOT", None)
+    result = PipelineOrchestrator(FakeDetector([_bib(0.9)]), FakeReader()).process(
+        "/fake.jpg", crop_dir="run7"
+    )
+    assert result.bib_readings[0]["crop_path"] is None

@@ -107,6 +107,9 @@ image = (
             "PARSEQ_WEIGHTS": "/vol/weights/parseq_4phase",
             "TROCR_WEIGHTS": "/vol/weights/trocr_bib_4phase/best",
             "TOKENIZERS_PARALLELISM": "false",
+            # Bib crops requested with ?crop_dir= land here; fetch them with
+            #   modal volume get cycling-photo-ai-eval-vol /crops/<dir> ./crops
+            "CROP_SAVE_ROOT": "/vol/crops",
         }
     )
     .add_local_python_source("cycling_photo_ai")
@@ -137,6 +140,20 @@ volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=F
 @modal.concurrent(max_inputs=1)
 @modal.asgi_app()
 def api():
+    import threading
+    import time
+
     from cycling_photo_ai.pipeline.app import app as inner_app
 
+    # Files written under /vol (bib crops) are persisted at container exit;
+    # commit every few minutes as well so a killed container loses little.
+    def _commit_forever() -> None:
+        while True:
+            time.sleep(180)
+            try:
+                volume.commit()
+            except Exception as exc:  # noqa: BLE001 - never take the service down
+                print(f"[volume] commit failed: {exc}", flush=True)
+
+    threading.Thread(target=_commit_forever, daemon=True).start()
     return inner_app
