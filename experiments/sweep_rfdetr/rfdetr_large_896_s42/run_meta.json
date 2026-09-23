@@ -1,0 +1,28 @@
+{
+  "run_name": "rfdetr_large_896_s42",
+  "family": "rfdetr",
+  "variant": "large",
+  "resolution": 896,
+  "seed": 42,
+  "rfdetr": "1.10.1",
+  "torch": "2.14.0+cu130",
+  "gpu": "NVIDIA A100-SXM4-40GB",
+  "train_seconds": 1780.1,
+  "recipe": {
+    "epochs": 80,
+    "batch_size": 16,
+    "grad_accum_steps": 1,
+    "lr": 0.0002,
+    "lr_encoder": 2e-05,
+    "weight_decay": 0.0001,
+    "multi_scale": true,
+    "do_random_resize_via_padding": true,
+    "use_ema": true,
+    "early_stopping": true,
+    "early_stopping_patience": 12,
+    "early_stopping_min_delta": 0.003
+  },
+  "split_sha256": "8fd1af326653a7eadd08743b3c630a54420c53b088c9a8d819668965771695a3",
+  "params_M": 34.074,
+  "best_checkpoint": "checkpoint_best_ema.pth"
+}

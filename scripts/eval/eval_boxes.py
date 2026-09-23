@@ -54,7 +54,7 @@ def yolo_labels_to_coco(data_yaml: Path, split: str, names: dict) -> tuple[dict,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--weights", required=True)
+    ap.add_argument("--weights", default=None)
     ap.add_argument("--data", required=True)
     ap.add_argument("--split", default="test", choices=["val", "test"])
     ap.add_argument("--imgsz", type=int, default=640)
@@ -62,15 +62,21 @@ def main():
     ap.add_argument("--thr", type=float, default=None, help="umbral fijado en val; si falta, se calcula (máx F1) y se reporta")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--dt-json", default=None, help="detecciones COCO precomputadas (píxeles originales, image_id = índice en orden de nombre); omite la inferencia")
+    ap.add_argument("--names", default=None, help='con --dt-json: nombres de clase, p. ej. "competidor_number"')
     a = ap.parse_args()
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
 
-    from ultralytics import YOLO
     from pycocotools.coco import COCO
     from pycocotools.cocoeval import COCOeval
 
-    model = YOLO(a.weights)
-    names = {int(k): v for k, v in model.names.items()}
+    if a.dt_json:
+        model = None
+        names = {i: n for i, n in enumerate(a.names.split(","))}
+    else:
+        from ultralytics import YOLO
+        model = YOLO(a.weights)
+        names = {int(k): v for k, v in model.names.items()}
     plate_id = [k for k, v in names.items() if v == PLATE][0]
     gt, paths = yolo_labels_to_coco(Path(a.data), a.split, names)
     if a.limit:
@@ -83,7 +89,15 @@ def main():
     # Inferencia a conf 0.001, misma NMS que el entrenamiento (iou 0.7)
     dets, rows = [], []
     scale = {}
-    for i, p in enumerate(paths):
+    from PIL import Image as _Image
+    if a.dt_json:
+        pre = json.load(open(a.dt_json))
+        for i, p in enumerate(paths):
+            W, H = _Image.open(p).size
+            scale[i] = a.imgsz / max(W, H)
+        dets = [d for d in pre if d["image_id"] < len(paths)]
+        rows = [(d["image_id"], paths[d["image_id"]].name, d["category_id"], d["score"], d["bbox"][0], d["bbox"][1], d["bbox"][0] + d["bbox"][2], d["bbox"][1] + d["bbox"][3]) for d in dets]
+    for i, p in enumerate(paths) if not a.dt_json else []:
         r = model.predict(str(p), imgsz=a.imgsz, conf=0.001, iou=0.7, max_det=300, verbose=False, device=a.device)[0]
         H, W = r.orig_shape
         s = a.imgsz / max(W, H)  # factor con el que el detector vio la imagen (letterbox)
