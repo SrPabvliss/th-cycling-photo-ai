@@ -1,0 +1,101 @@
+{
+  "seed": 42,
+  "rule": {
+    "thr_adj": 0.1,
+    "gap": 3,
+    "thr_pure": 0.05
+  },
+  "fracs": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "n_images": 1200,
+  "n_groups": 950,
+  "group_size_hist": {
+    "1": 831,
+    "2": 80,
+    "3": 23,
+    "4": 9,
+    "6": 3,
+    "7": 1,
+    "11": 1,
+    "12": 1,
+    "56": 1
+  },
+  "per_split": {
+    "train": {
+      "images": 841,
+      "plates": 597,
+      "images_with_plate": 595,
+      "anns": 3980,
+      "size_bucket": {
+        "small": 281,
+        "large": 560
+      },
+      "prefix": {
+        "el_calvario": 69,
+        "DSC": 450,
+        "other": 154,
+        "_MG": 66,
+        "sultana": 77,
+        "P": 25
+      },
+      "from_old_split": {
+        "train": 640,
+        "valid": 135,
+        "test": 66
+      }
+    },
+    "val": {
+      "images": 180,
+      "plates": 130,
+      "images_with_plate": 128,
+      "anns": 859,
+      "size_bucket": {
+        "small": 61,
+        "large": 119
+      },
+      "prefix": {
+        "sultana": 16,
+        "DSC": 98,
+        "other": 33,
+        "_MG": 14,
+        "el_calvario": 14,
+        "P": 5
+      },
+      "from_old_split": {
+        "train": 132,
+        "valid": 33,
+        "test": 15
+      }
+    },
+    "test": {
+      "images": 179,
+      "plates": 128,
+      "images_with_plate": 127,
+      "anns": 861,
+      "size_bucket": {
+        "large": 120,
+        "small": 59
+      },
+      "prefix": {
+        "DSC": 97,
+        "sultana": 16,
+        "other": 32,
+        "_MG": 14,
+        "P": 5,
+        "el_calvario": 15
+      },
+      "from_old_split": {
+        "train": 131,
+        "valid": 30,
+        "test": 18
+      }
+    }
+  },
+  "cross_split_pure_pairs": 0,
+  "cross_split_adjacent_similar_pairs": 0,
+  "cross_split_min_distance": 0.05215531587600708,
+  "group_size_max": 56
+}

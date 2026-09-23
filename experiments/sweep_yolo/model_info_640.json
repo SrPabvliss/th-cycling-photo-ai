@@ -1,0 +1,50 @@
+{
+  "yolov8n": {
+    "params_M": 3.16,
+    "gflops_640": 8.9
+  },
+  "yolov8s": {
+    "params_M": 11.17,
+    "gflops_640": 28.8
+  },
+  "yolov8m": {
+    "params_M": 25.9,
+    "gflops_640": 79.3
+  },
+  "yolo11n": {
+    "params_M": 2.62,
+    "gflops_640": 6.6
+  },
+  "yolo11s": {
+    "params_M": 9.46,
+    "gflops_640": 21.7
+  },
+  "yolo11m": {
+    "params_M": 20.11,
+    "gflops_640": 68.5
+  },
+  "yolo12n": {
+    "params_M": 2.6,
+    "gflops_640": 6.7
+  },
+  "yolo12s": {
+    "params_M": 9.28,
+    "gflops_640": 21.7
+  },
+  "yolo12m": {
+    "params_M": 20.2,
+    "gflops_640": 68.1
+  },
+  "yolo26n": {
+    "params_M": 2.57,
+    "gflops_640": 6.1
+  },
+  "yolo26s": {
+    "params_M": 10.01,
+    "gflops_640": 22.8
+  },
+  "yolo26m": {
+    "params_M": 21.9,
+    "gflops_640": 75.4
+  }
+}

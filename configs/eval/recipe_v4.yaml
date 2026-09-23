@@ -1,0 +1,51 @@
+# Receta congelada del barrido de detectores (R-4). Fuente: R1-auditoria-receta-yolo.md
+# (vault ESWA-TITANTV/09-detectores) y decisión 2026-09-22-receta-barrido-yolo.md.
+# Reproduce el entrenamiento de producción (weights/yolo11m_v3cleaned/best.pt) salvo:
+#   - fliplr 0.0 (producción 0.5): los dígitos no son simétricos.
+#   - optimizer/lr0/momentum explícitos (producción usó optimizer=auto, que resolvió a AdamW 0.001111 / 0.9).
+#   - save_json true para evaluación COCO por clase.
+#   - data: split v4 por grupos (experiments/split_v4/split.csv), no el de Roboflow.
+# Varían solo: model (generación × tamaño), imgsz, seed y el conjunto de clases del dataset.
+# GPU de entrenamiento: A100 40 GB (decisión 2026-09-22 §8). Latencia se mide aparte en L4 (hardware de despliegue).
+epochs: 100
+patience: 15
+batch: 32          # nbs 64 -> acumulación 2 -> lote efectivo 64. Si baja por memoria, mantener efectivo 64.
+nbs: 64
+optimizer: AdamW
+lr0: 0.001111
+lrf: 0.01
+momentum: 0.9
+weight_decay: 0.0005
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.1
+cos_lr: false
+deterministic: true
+amp: true
+rect: false
+cache: ram        # decodifica cada JPEG de 12 Mpx una sola vez; no cambia el aprendizaje, solo la carga de datos (decisión 2026-09-22 §8)
+multi_scale: 0.0
+mosaic: 1.0
+close_mosaic: 10
+mixup: 0.0
+cutmix: 0.0
+copy_paste: 0.0
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 0.0
+translate: 0.1
+scale: 0.5
+shear: 0.0
+perspective: 0.0
+fliplr: 0.0
+flipud: 0.0
+box: 7.5
+cls: 0.5
+dfl: 1.5
+iou: 0.7
+max_det: 300
+single_cls: false
+save_json: true
+plots: true
+workers: 8
