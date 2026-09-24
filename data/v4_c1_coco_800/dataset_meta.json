@@ -1,0 +1,22 @@
+{
+  "src": "data/v4_c1_coco",
+  "max_side": 800,
+  "split_sha256": "8fd1af326653a7eadd08743b3c630a54420c53b088c9a8d819668965771695a3",
+  "stats": {
+    "train": {
+      "images": 841,
+      "anns": 597,
+      "resized": 841
+    },
+    "valid": {
+      "images": 180,
+      "anns": 130,
+      "resized": 180
+    },
+    "test": {
+      "images": 179,
+      "anns": 128,
+      "resized": 179
+    }
+  }
+}

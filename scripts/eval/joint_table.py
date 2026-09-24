@@ -22,13 +22,20 @@ for f in glob.glob("experiments/sweep_rfdetr/*/boxes_test/metrics.json"):
     meta[k] = mm["params_M"]
     lf = d / "latency_l4_v2.json"
     if lf.exists() and mm["seed"] == 42: lat[k] = json.load(open(lf))["fp32"]["p50_ms_median_of_reps"]
-name = {"yolov8m": "YOLOv8-M", "yolo11m": "YOLO11-M", "yolo26m": "YOLO26-M", "yolo11s": "YOLO11-S", "nano": "RF-DETR-N", "small": "RF-DETR-S", "medium": "RF-DETR-M", "large": "RF-DETR-L"}
+for f in glob.glob("experiments/sweep_dfine/*/boxes_test/metrics.json"):
+    d = Path(f).parent.parent; mm = json.load(open(d / "run_meta.json")); t = json.load(open(f))
+    k = ("D-FINE", "dfine_" + mm["variant"], mm["resolution"])
+    rows[k].append({"AP50": t["AP50"], "AP75": t["AP75"], "AP50_95": t["AP50_95"], "AP_small": t["AP_small"], "P": t["at_thr"]["P"], "R": t["at_thr"]["R"], "F1": t["at_thr"]["F1"], "IoU": t["at_thr"]["iou_tp_mean"], "train_s": mm["train_seconds"]})
+    meta[k] = mm["params_M"]
+    lf = d / "latency_l4_v2.json"
+    if lf.exists() and mm["seed"] == 42: lat[k] = json.load(open(lf))["fp32"]["p50_ms_median_of_reps"]
+name = {"dfine_s": "D-FINE-S", "dfine_m": "D-FINE-M", "dfine_l": "D-FINE-L", "yolov8m": "YOLOv8-M", "yolo11m": "YOLO11-M", "yolo26m": "YOLO26-M", "yolo11s": "YOLO11-S", "nano": "RF-DETR-N", "small": "RF-DETR-S", "medium": "RF-DETR-M", "large": "RF-DETR-L"}
 def fmt(v, pct=True):
     v = np.array(v) * (100 if pct else 1); d = 1 if pct else 3
     return f"{v.mean():.{d}f}" if len(v) == 1 else f"{v.mean():.{d}f} ± {v.std(ddof=1):.{d}f}"
 hdr = ["Modelo", "Res.", "Semillas", "Params (M)", "P (%)", "R (%)", "F1 (%)", "AP50 (%)", "AP75 (%)", "AP50:95 (%)", "AP_small (%)", "IoU TP", "GPU L4 fp32 (ms)", "Entren. (s)"]
 lines = ["| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)]
-order = sorted(rows, key=lambda k: (k[0] != "YOLO", name.get(k[1], k[1]), k[2]))
+order = sorted(rows, key=lambda k: ({"YOLO": 0, "RF-DETR": 1, "D-FINE": 2}[k[0]], name.get(k[1], k[1]), k[2]))
 best = max(np.mean([x["AP50_95"] for x in rows[k]]) for k in order)
 for k in order:
     g = rows[k]; fam, model, res = k

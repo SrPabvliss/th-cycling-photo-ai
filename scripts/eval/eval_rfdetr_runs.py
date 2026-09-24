@@ -2,7 +2,8 @@
 y tabula. Usage: uv run python scripts/eval/eval_rfdetr_runs.py"""
 import json, subprocess, sys
 from pathlib import Path
-root = Path("experiments/sweep_rfdetr"); rows = []
+import sys as _s
+root = Path(_s.argv[1] if len(_s.argv) > 1 else "experiments/sweep_rfdetr"); rows = []
 for meta in sorted(root.glob("*/run_meta.json")):
     m = json.load(open(meta)); d = meta.parent; res = m["resolution"]
     if not (d / "boxes_val" / "metrics.json").exists():

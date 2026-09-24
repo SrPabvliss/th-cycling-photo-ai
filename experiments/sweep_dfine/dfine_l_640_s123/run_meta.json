@@ -1,0 +1,16 @@
+{
+  "run_name": "dfine_l_640_s123",
+  "family": "dfine",
+  "variant": "l",
+  "resolution": 640,
+  "seed": 123,
+  "commit": "956d1709314c2c6a4df6f34de232054578a7449f",
+  "torch": "2.14.0+cu130",
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "train_seconds": 2620.5,
+  "best_checkpoint": "best_stg2.pth",
+  "pretrain": "https://github.com/Peterande/storage/releases/download/dfinev1.0/dfine_l_coco.pth",
+  "params_M": 30.664,
+  "split_sha256": "8fd1af326653a7eadd08743b3c630a54420c53b088c9a8d819668965771695a3",
+  "recipe": "configs/dfine/custom/dfine_hgnetv2_l_custom.yml (oficial) con total_batch_size 16, epochs 80 (policy 72), datos a 800 px, -t coco, --use-amp"
+}
