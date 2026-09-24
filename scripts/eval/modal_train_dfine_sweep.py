@@ -28,7 +28,7 @@ image = (
     .apt_install("git", "wget", "libgl1-mesa-glx", "libglib2.0-0")
     .pip_install("torch", "torchvision", "faster-coco-eval>=1.6.6", "PyYAML", "tensorboard", "scipy", "calflops",
                  "transformers", "loguru", "pycocotools>=2.0.8", "pillow", "numpy", "matplotlib", "opencv-python-headless")
-    .run_commands(f"git clone {REPO} /opt/dfine && cd /opt/dfine && git rev-parse HEAD > /opt/dfine/COMMIT",
+    .run_commands(f"git clone {REPO} /opt/dfine && cd /opt/dfine && git checkout 956d1709314c2c6a4df6f34de232054578a7449f && git rev-parse HEAD > /opt/dfine/COMMIT",
                   "mkdir -p /opt/weights && cd /opt/weights && " + " && ".join(f"wget -q {u}" for u in WEIGHTS.values()))
     .add_local_file("experiments/split_v4/split.csv", "/root/split.csv")
 )
@@ -57,9 +57,36 @@ val_dataloader:
     ann_file: {ds}/valid/_annotations.coco.json
 """
 
+# Resolución distinta de 640 (G3 de D-FINE): se reescriben las tres entradas de tamaño de la receta oficial
+# (Resize de train y val, base_size del multiescala, eval_spatial_size); las demás ops son las oficiales.
+CFG_RES = """eval_spatial_size: [{r}, {r}]
+train_dataloader:
+  dataset:
+    transforms:
+      ops:
+        - {{type: RandomPhotometricDistort, p: 0.5}}
+        - {{type: RandomZoomOut, fill: 0}}
+        - {{type: RandomIoUCrop, p: 0.8}}
+        - {{type: SanitizeBoundingBoxes, min_size: 1}}
+        - {{type: RandomHorizontalFlip}}
+        - {{type: Resize, size: [{r}, {r}]}}
+        - {{type: SanitizeBoundingBoxes, min_size: 1}}
+        - {{type: ConvertPILImage, dtype: 'float32', scale: True}}
+        - {{type: ConvertBoxes, fmt: 'cxcywh', normalize: True}}
+  collate_fn:
+    base_size: {r}
+val_dataloader:
+  dataset:
+    transforms:
+      ops:
+        - {{type: Resize, size: [{r}, {r}]}}
+        - {{type: ConvertPILImage, dtype: 'float32', scale: True}}
+"""
+DATA_BY_RES = {640: "v4_c1_coco_800", 800: "v4_c1_coco_1000"}   # copia reducida a 1,25 × la resolución de entrada
+
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=6 * 3600, volumes={VOLUME_PATH: volume}, cpu=16, memory=32768)
-def train(variant: str, seed: int) -> dict:
+def train(variant: str, seed: int, res: int = 640) -> dict:
     import hashlib
     import json
     import os
@@ -69,12 +96,20 @@ def train(variant: str, seed: int) -> dict:
 
     import torch
 
-    ds = f"{VOLUME_PATH}/datasets/v4_c1_coco_800"   # copia reducida (lado mayor 800; D-FINE entrena a 640): D-FINE decodifica en CPU a resolución completa; con 12 Mpx tardaba 14 s por lote
-    run_name = f"dfine_{variant}_640_s{seed}"
+    ds = f"{VOLUME_PATH}/datasets/{DATA_BY_RES[res]}"   # copia reducida (lado mayor 800; D-FINE entrena a 640): D-FINE decodifica en CPU a resolución completa; con 12 Mpx tardaba 14 s por lote
+    run_name = f"dfine_{variant}_{res}_s{seed}"
     out = Path(VOLUME_PATH) / "runs" / run_name
     out.mkdir(parents=True, exist_ok=True)
     cfg_path = out / "config_eswa.yml"
-    cfg_path.write_text(CFG_TEMPLATE.format(v=variant, out=str(out), ds=ds))
+    cfg_text = CFG_TEMPLATE.format(v=variant, out=str(out), ds=ds)
+    if res != 640:   # fusión profunda (un segundo train_dataloader en el mismo yml pisaría el primero entero)
+        import yaml
+        def merge(a, b):
+            for k, v in b.items():
+                a[k] = merge(a[k], v) if isinstance(v, dict) and isinstance(a.get(k), dict) else v
+            return a
+        cfg_text = yaml.safe_dump(merge(yaml.safe_load(cfg_text), yaml.safe_load(CFG_RES.format(r=res))), sort_keys=False)
+    cfg_path.write_text(cfg_text)
     commit = open("/opt/dfine/COMMIT").read().strip()
     gpu_name = torch.cuda.get_device_name(0)
     print(f"D-FINE {commit[:8]} torch {torch.__version__} GPU {gpu_name} run {run_name}")
@@ -101,7 +136,7 @@ def train(variant: str, seed: int) -> dict:
     cfg.model.load_state_dict(state)
     model = cfg.model.deploy().cuda().eval()
     post = cfg.postprocessor.deploy()
-    tf = T.Compose([T.Resize((640, 640)), T.ToTensor()])
+    tf = T.Compose([T.Resize((res, res)), T.ToTensor()])
     ds_full = f"{VOLUME_PATH}/datasets/v4_c1_coco"   # detecciones sobre las fotos originales (píxeles originales, como el resto de familias)
     for split, folder in (("val", "valid"), ("test", "test")):
         paths = sorted(p for p in Path(f"{ds_full}/{folder}").iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
@@ -116,11 +151,11 @@ def train(variant: str, seed: int) -> dict:
                     dets.append({"image_id": i, "category_id": int(l), "bbox": [x1, y1, x2 - x1, y2 - y1], "score": float(s)})
         json.dump(dets, open(out / f"dt_{split}.json", "w"))
         print(f"{split}: {len(paths)} imgs, {len(dets)} dets")
-    meta = {"run_name": run_name, "family": "dfine", "variant": variant, "resolution": 640, "seed": seed, "commit": commit,
+    meta = {"run_name": run_name, "family": "dfine", "variant": variant, "resolution": res, "seed": seed, "commit": commit,
             "torch": torch.__version__, "gpu": gpu_name, "train_seconds": round(train_s, 1), "best_checkpoint": best.name,
             "pretrain": WEIGHTS[variant], "params_M": round(sum(p.numel() for p in cfg.model.parameters()) / 1e6, 3),
             "split_sha256": hashlib.sha256(open("/root/split.csv", "rb").read()).hexdigest(),
-            "recipe": f"configs/dfine/custom/dfine_hgnetv2_{variant}_custom.yml (oficial) con total_batch_size 16, epochs 80 (policy 72), datos a 800 px, -t coco, --use-amp"}
+            "recipe": f"configs/dfine/custom/dfine_hgnetv2_{variant}_custom.yml (oficial) con total_batch_size 16, epochs 80 (policy 72), datos a {DATA_BY_RES[res]}, entrada {res}, -t coco, --use-amp"}
     json.dump(meta, open(out / "run_meta.json", "w"), indent=2)
     volume.commit()
     print(json.dumps(meta, indent=2))
@@ -142,7 +177,7 @@ ck = torch.load(str(out / meta["best_checkpoint"]), map_location="cpu")
 cfg.model.load_state_dict(ck["ema"]["module"] if "ema" in ck else ck["model"])
 net = cfg.model.deploy().cuda().eval(); post = cfg.postprocessor.deploy()
 def bench(half):
-    x = torch.rand(1, 3, 640, 640, device="cuda")
+    x = torch.rand(1, 3, meta["resolution"], meta["resolution"], device="cuda")
     ctx = torch.autocast("cuda", dtype=torch.float16) if half else torch.no_grad()
     with torch.no_grad(), ctx:
         for _ in range(20): net(x)
@@ -150,7 +185,7 @@ def bench(half):
         for _ in range(100):
             t0 = time.perf_counter(); net(x); torch.cuda.synchronize(); ts.append((time.perf_counter() - t0) * 1000)
     ts = np.array(ts); return {"p50_ms": float(np.percentile(ts, 50)), "p95_ms": float(np.percentile(ts, 95))}
-tf = T.Compose([T.Resize((640, 640)), T.ToTensor()])
+tf = T.Compose([T.Resize((meta["resolution"], meta["resolution"])), T.ToTensor()])
 allp = sorted((Path(vol) / "datasets" / "v4_c1_coco" / "test").glob("*.jpg"))
 big = [p for p in allp if max(Image.open(p).size) >= 2000][:25]; small = [p for p in allp if max(Image.open(p).size) < 2000][:25]
 def svc(p):
@@ -203,10 +238,10 @@ def latency(run_names: list[str]) -> dict:
 
 
 @app.local_entrypoint()
-def main(models: str = "s", seeds: str = "42", latency_runs: str = ""):
+def main(models: str = "s", seeds: str = "42", latency_runs: str = "", res: int = 640):
     if latency_runs:
         latency.remote([r.strip() for r in latency_runs.split(",") if r.strip()]); return
-    jobs = [(m.strip(), int(s)) for m in models.split(",") for s in seeds.split(",")]
-    print(f"lanzando {len(jobs)}: {[f'dfine_{j[0]}_640_s{j[1]}' for j in jobs]}")
+    jobs = [(m.strip(), int(s), res) for m in models.split(",") for s in seeds.split(",")]
+    print(f"lanzando {len(jobs)}: {[f'dfine_{j[0]}_{res}_s{j[1]}' for j in jobs]}")
     for meta in train.starmap(jobs):
         print(f"done {meta['run_name']}: {meta['train_seconds']:.0f}s")
