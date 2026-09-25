@@ -220,8 +220,13 @@ def run(seed: int, data_root: Path, out_dir: Path, cache_dir: Path, phases=("pha
                 for b, (t, g) in enumerate(zip(texts, gts)):
                     digits = "".join(c for c in t if c.isdigit())
                     per, logp = [], []
+                    # corrección 2026-09-25: la etiqueta lleva `<s>` al inicio y el modelo lo emite en el paso 0; antes el
+                    # bucle cortaba ahí y `conf_min` era la probabilidad de `<s>` (1,0). Formato genérico para eval_crops.py
+                    # (logp sobre el vocabulario permitido, label_ids) en reinfer_trocr_preds.py; aquí solo se salta `<s>`.
                     for step, sc in enumerate(out.scores):
                         tid = int(seqs[b, step]) if step < seqs.shape[1] else tok.pad_token_id
+                        if tid in (tok.cls_token_id, tok.bos_token_id):
+                            continue
                         lsm = sc[b].float().log_softmax(-1)
                         per.append(float(lsm[tid].exp()))
                         top = torch.topk(lsm, TOPK)

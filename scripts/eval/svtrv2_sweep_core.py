@@ -190,7 +190,7 @@ def run(
             W, H = BASE_SHAPE[r - 1]
             img = TF.resize(img, (H, W), interpolation=T.InterpolationMode.BICUBIC)
             label = "".join(c for c in label if c.isdigit())[:MAX_LEN]
-            return to_tensor(img), label, r
+            return to_tensor(img), label, r, i
 
     class BucketBatchSampler(Sampler):
         """Lotes homogéneos en r (mismo tamaño de imagen); orden de lotes barajado en entrenamiento."""
@@ -218,7 +218,7 @@ def run(
             return sum((len(ids) + self.bs - 1) // self.bs for ids in self.by_r.values())
 
     def collate(batch):
-        return torch.stack([b[0] for b in batch]), [b[1] for b in batch], batch[0][2]
+        return torch.stack([b[0] for b in batch]), [b[1] for b in batch], batch[0][2], [b[3] for b in batch]
 
     def datasets_for(phase_cfg):
         d = phase_cfg["data"]
@@ -268,7 +268,7 @@ def run(
         model.eval()
         correct = total = 0
         with torch.no_grad():
-            for x, gts, _ in loader:
+            for x, gts, _, _ in loader:
                 x = x.to(device)
                 with autocast:
                     probs = model(x).float()
@@ -330,7 +330,7 @@ def run(
         bucket_hist = {}
         for epoch in range(1, epochs + 1):
             tot_loss = nb = 0
-            for x, labels, r in train_loader:
+            for x, labels, r, _ in train_loader:
                 bucket_hist[r] = bucket_hist.get(r, 0) + len(labels)
                 x = x.to(device)
                 tgt, lens = encode_labels(labels)
@@ -375,16 +375,19 @@ def run(
     for split in ("val", "test"):
         ds = LMDBDataset(data_root / "split_v2" / "lmdb" / split, list(range(16)) if smoke else None)
         loader = make_loader(ds, 64, False, 0)
-        preds = []
+        # los lotes van agrupados por r; las predicciones se vuelcan en el orden del LMDB (= split.csv),
+        # el mismo que PARSeq y TrOCR, porque eval_crops.py empareja por índice (corrección 2026-09-25)
+        preds = {}
         with torch.no_grad():
-            for x, gts, r in loader:
+            for x, gts, r, idxs in loader:
                 x = x.to(device)
                 with autocast:
                     probs = model(x).float().cpu()
-                for (digits, per, rows), g in zip(greedy_decode(probs), gts):
-                    preds.append({"label": g, "pred": digits, "raw": digits, "probs": per,
-                                  "conf_min": min(per) if per else 0.0, "bucket": r, "n_frames": int(probs.shape[1]),
-                                  "logp": [[round(v, 5) for v in row] for row in rows]})
+                for (digits, per, rows), g, i in zip(greedy_decode(probs), gts, idxs):
+                    preds[i] = {"label": g, "pred": digits, "raw": digits, "probs": per,
+                                "conf_min": min(per) if per else 0.0, "bucket": r, "n_frames": int(probs.shape[1]),
+                                "logp": [[round(v, 5) for v in row] for row in rows]}
+        preds = [preds[i] for i in sorted(preds)]
         json.dump(preds, open(out_dir / f"preds_{split}.json", "w"))
         em = sum(p["pred"] == p["label"] for p in preds) / max(len(preds), 1)
         meta[f"{split}_em_final"] = em
