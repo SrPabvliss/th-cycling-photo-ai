@@ -1,0 +1,80 @@
+{
+  "parseq_p1-p2-p3_s123": {
+    "ar=False,refine=0": {
+      "val": 0.84,
+      "test": 0.86
+    },
+    "ar=False,refine=1": {
+      "val": 0.83,
+      "test": 0.86
+    },
+    "ar=False,refine=2": {
+      "val": 0.83,
+      "test": 0.86
+    },
+    "ar=True,refine=0": {
+      "val": 0.83,
+      "test": 0.86
+    },
+    "ar=True,refine=1": {
+      "val": 0.83,
+      "test": 0.86
+    },
+    "ar=True,refine=2": {
+      "val": 0.83,
+      "test": 0.86
+    }
+  },
+  "parseq_p1-p2-p3_s42": {
+    "ar=False,refine=0": {
+      "val": 0.82,
+      "test": 0.86
+    },
+    "ar=False,refine=1": {
+      "val": 0.85,
+      "test": 0.85
+    },
+    "ar=False,refine=2": {
+      "val": 0.85,
+      "test": 0.85
+    },
+    "ar=True,refine=0": {
+      "val": 0.84,
+      "test": 0.85
+    },
+    "ar=True,refine=1": {
+      "val": 0.84,
+      "test": 0.85
+    },
+    "ar=True,refine=2": {
+      "val": 0.84,
+      "test": 0.85
+    }
+  },
+  "parseq_p1-p2-p3_s7": {
+    "ar=False,refine=0": {
+      "val": 0.82,
+      "test": 0.91
+    },
+    "ar=False,refine=1": {
+      "val": 0.83,
+      "test": 0.89
+    },
+    "ar=False,refine=2": {
+      "val": 0.83,
+      "test": 0.89
+    },
+    "ar=True,refine=0": {
+      "val": 0.83,
+      "test": 0.89
+    },
+    "ar=True,refine=1": {
+      "val": 0.83,
+      "test": 0.89
+    },
+    "ar=True,refine=2": {
+      "val": 0.83,
+      "test": 0.89
+    }
+  }
+}
