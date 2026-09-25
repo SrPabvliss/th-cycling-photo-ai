@@ -1,0 +1,26 @@
+{
+  "data/svhn/lmdb/data.mdb": {
+    "sha256": "78f16a06486dc9ddb1bcc7d76542ee5f3c895412e2f3d6430f1c7cf5e62fd213",
+    "bytes": 1931751424
+  },
+  "data/synthetic/lmdb/data.mdb": {
+    "sha256": "ed8662cf5a72f63a6c200a48b9791381aa6fed6f2c29bfc3390b164fee3b9301",
+    "bytes": 1232748544
+  },
+  "data/synthetic_v2/lmdb/data.mdb": {
+    "sha256": "f2bd76f296b2136a3fbf205b10cd7b7b9936e506fce58fb511fbff94ea5ccd0f",
+    "bytes": 1454899200
+  },
+  "data/split_v2/lmdb/train/data.mdb": {
+    "sha256": "d504fd422c29f14cdcaa08e1dfa2f5af90f21f3e9c4bf53b7f502df55ce513a9",
+    "bytes": 39960576
+  },
+  "data/split_v2/lmdb/val/data.mdb": {
+    "sha256": "7d6ed2ebe5dc938787f683c15e00cb42471314e16a3f916e14b1101a096b153f",
+    "bytes": 9830400
+  },
+  "data/split_v2/lmdb/test/data.mdb": {
+    "sha256": "111150b148b5ce26a38322f608394f6b98b91f0d11dcb261485562aa78197be5",
+    "bytes": 8929280
+  }
+}

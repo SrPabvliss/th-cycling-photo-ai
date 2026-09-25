@@ -21,7 +21,7 @@ image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("libgl1-mesa-glx", "libglib2.0-0")
     .pip_install(f"torch=={TORCH}", f"torchvision=={TORCHVISION}", f"transformers=={TRANSFORMERS}", "sentencepiece>=0.2.0", "protobuf>=4.25",
-                 "lmdb>=1.4.0", "pillow>=10.4.0", "numpy>=1.26.0", "timm>=1.0.0")
+                 "lmdb>=1.4.0", "pillow>=10.4.0", "numpy>=1.26.0", "timm==1.0.11")
     .run_commands(
         "python -c \"from transformers import TrOCRProcessor, VisionEncoderDecoderModel; "
         "TrOCRProcessor.from_pretrained('microsoft/trocr-small-printed', cache_dir='/root/hf'); "

@@ -20,6 +20,7 @@ from pathlib import Path
 from parseq_sweep_core import RECIPE, sha256_file  # misma receta de fases
 
 BASE = "microsoft/trocr-small-printed"
+HF_REVISION = "04e994ab854b0089d4929f48c2b4dbe2ce78a340"  # P-75: revisión fijada (2026-09-25); las corridas previas usaron `main`, que resolvía a esta misma
 MAX_LEN = 4
 TOPK = 32
 
@@ -54,8 +55,8 @@ def run(seed: int, data_root: Path, out_dir: Path, cache_dir: Path, phases=("pha
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    processor = TrOCRProcessor.from_pretrained(BASE, cache_dir=str(cache_dir))
-    model = VisionEncoderDecoderModel.from_pretrained(BASE, cache_dir=str(cache_dir))
+    processor = TrOCRProcessor.from_pretrained(BASE, cache_dir=str(cache_dir), revision=HF_REVISION)
+    model = VisionEncoderDecoderModel.from_pretrained(BASE, cache_dir=str(cache_dir), revision=HF_REVISION)
     tok = processor.tokenizer
     model.config.pad_token_id = tok.pad_token_id
     model.config.decoder_start_token_id = tok.cls_token_id
@@ -151,7 +152,7 @@ def run(seed: int, data_root: Path, out_dir: Path, cache_dir: Path, phases=("pha
         "model": "trocr_small_printed", "seed": seed, "base": BASE, "params_M": round(n_params, 3),
         "transformers": transformers.__version__, "torch": torch.__version__,
         "gpu": torch.cuda.get_device_name(0) if device == "cuda" else device,
-        "recipe": RECIPE, "phases": list(phases), "smoke": smoke, "synthetic_dir": synthetic, "constrained_decoding": True,
+        "recipe": RECIPE, "phases": list(phases), "smoke": smoke, "synthetic_dir": synthetic, "hf_revision": HF_REVISION, "constrained_decoding": True,
         "n_allowed_tokens": int(len(allowed)),
         "split_v2_sha256": sha256_file(split_csv) if split_csv and split_csv.exists() else None,
         "phase_results": {},
