@@ -33,7 +33,7 @@ volume = modal.Volume.from_name(VOL_NAME, create_if_missing=True)
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git", "libgl1-mesa-glx", "libglib2.0-0")
+    .apt_install("git", "wget", "libgl1-mesa-glx", "libglib2.0-0")
     .pip_install(f"torch=={TORCH}", f"torchvision=={TORCHVISION}", f"timm=={TIMM}", "lmdb>=1.4.0", "pillow>=10.4.0", "numpy>=1.26.0")
     .run_commands(
         f"git clone https://github.com/baudm/parseq /root/parseq && cd /root/parseq && git checkout {PARSEQ_COMMIT}",
