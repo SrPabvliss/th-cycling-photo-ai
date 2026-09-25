@@ -24,8 +24,8 @@ image = (
                  "lmdb>=1.4.0", "pillow>=10.4.0", "numpy>=1.26.0", "timm==1.0.11")
     .run_commands(
         "python -c \"from transformers import TrOCRProcessor, VisionEncoderDecoderModel; "
-        "TrOCRProcessor.from_pretrained('microsoft/trocr-small-printed', cache_dir='/root/hf'); "
-        "VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-small-printed', cache_dir='/root/hf')\""
+        "TrOCRProcessor.from_pretrained('microsoft/trocr-small-printed', cache_dir='/root/hf', revision='04e994ab854b0089d4929f48c2b4dbe2ce78a340'); "
+        "VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-small-printed', cache_dir='/root/hf', revision='04e994ab854b0089d4929f48c2b4dbe2ce78a340')\""
     )
     .add_local_file("scripts/eval/parseq_sweep_core.py", "/root/parseq_sweep_core.py")
     .add_local_file("scripts/eval/trocr_sweep_core.py", "/root/trocr_sweep_core.py")
