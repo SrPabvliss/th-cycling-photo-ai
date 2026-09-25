@@ -165,6 +165,49 @@
       }
     },
     {
+      "run": "trocr_small_p1-p2-p3_s123",
+      "T": 1.0,
+      "n_val": 100,
+      "n_test": 100,
+      "val_em": 0.58,
+      "val_ece": 0.4199999964237213,
+      "val_ece_T": 0.4199999964237213,
+      "val_auc": 0.51624135519871,
+      "val_errors": {
+        "sustitucion": 29,
+        "otro": 5,
+        "multiple": 6,
+        "omision": 2
+      },
+      "test_em": 0.42,
+      "test_ece": 0.5799999880790712,
+      "test_ece_T": 0.5799999880790712,
+      "test_auc": 0.4843701725089141,
+      "test_errors": {
+        "sustitucion": 33,
+        "multiple": 15,
+        "insercion": 5,
+        "omision": 1,
+        "otro": 4
+      },
+      "test_em@80": 0.41237113402061853,
+      "test_cov@80": 0.97,
+      "thr@80": 1.0,
+      "test_em@90": 0.41237113402061853,
+      "test_cov@90": 0.97,
+      "thr@90": 1.0,
+      "test_em@95": 0.41237113402061853,
+      "test_cov@95": 0.97,
+      "thr@95": 1.0,
+      "params_M": 61.597,
+      "train_seconds": 6165.6,
+      "best_epochs": {
+        "phase1": 8,
+        "phase2": 9,
+        "phase3": 4
+      }
+    },
+    {
       "run": "trocr_small_p1-p2-p3_s42",
       "T": 1.0,
       "n_val": 100,
@@ -206,6 +249,48 @@
         "phase1": 10,
         "phase2": 7,
         "phase3": 37
+      }
+    },
+    {
+      "run": "trocr_small_p1-p2-p3_s7",
+      "T": 1.0,
+      "n_val": 100,
+      "n_test": 100,
+      "val_em": 0.61,
+      "val_ece": 0.39,
+      "val_ece_T": 0.39,
+      "val_auc": 0.6260312579289041,
+      "val_errors": {
+        "insercion": 2,
+        "sustitucion": 29,
+        "multiple": 6,
+        "otro": 2
+      },
+      "test_em": 0.51,
+      "test_ece": 0.49,
+      "test_ece_T": 0.49,
+      "test_auc": 0.5764789224422506,
+      "test_errors": {
+        "sustitucion": 37,
+        "insercion": 4,
+        "multiple": 7,
+        "otro": 1
+      },
+      "test_em@80": 0.51,
+      "test_cov@80": 1.0,
+      "thr@80": 1.0,
+      "test_em@90": 0.51,
+      "test_cov@90": 1.0,
+      "thr@90": 1.0,
+      "test_em@95": 0.51,
+      "test_cov@95": 1.0,
+      "thr@95": 1.0,
+      "params_M": 61.597,
+      "train_seconds": 6090.2,
+      "best_epochs": {
+        "phase1": 10,
+        "phase2": 10,
+        "phase3": 55
       }
     }
   ],
@@ -284,40 +369,40 @@
     },
     {
       "config": "trocr_small_p1-p2-p3",
-      "seeds": 1,
+      "seeds": 3,
       "params_M": 61.597,
-      "val_em": 0.58,
-      "val_em_sd": 0.0,
-      "test_em": 0.52,
-      "test_em_sd": 0.0,
-      "test_em@80": 0.52,
-      "test_em@80_sd": 0.0,
-      "test_em@90": 0.52,
-      "test_em@90_sd": 0.0,
-      "test_em@95": 0.52,
-      "test_em@95_sd": 0.0,
-      "test_cov@80": 1.0,
-      "test_cov@80_sd": 0.0,
-      "test_cov@90": 1.0,
-      "test_cov@90_sd": 0.0,
-      "test_cov@95": 1.0,
-      "test_cov@95_sd": 0.0,
-      "test_auc": 0.6220818991474447,
-      "test_auc_sd": 0.0,
-      "test_ece": 0.48,
-      "test_ece_sd": 0.0,
-      "test_ece_T": 0.48,
-      "test_ece_T_sd": 0.0,
+      "val_em": 0.59,
+      "val_em_sd": 0.01732050807568879,
+      "test_em": 0.48333333333333334,
+      "test_em_sd": 0.05507570547286104,
+      "test_em@80": 0.4807903780068729,
+      "test_em@80_sd": 0.05946338966740753,
+      "test_em@90": 0.4807903780068729,
+      "test_em@90_sd": 0.05946338966740753,
+      "test_em@95": 0.4807903780068729,
+      "test_em@95_sd": 0.05946338966740753,
+      "test_cov@80": 0.9899999999999999,
+      "test_cov@80_sd": 0.01732050807568879,
+      "test_cov@90": 0.9899999999999999,
+      "test_cov@90_sd": 0.01732050807568879,
+      "test_cov@95": 0.9899999999999999,
+      "test_cov@95_sd": 0.01732050807568879,
+      "test_auc": 0.5609769980328698,
+      "test_auc_sd": 0.07015242090432063,
+      "test_ece": 0.5166666626930237,
+      "test_ece_sd": 0.0550756986187304,
+      "test_ece_T": 0.5166666626930237,
+      "test_ece_T_sd": 0.0550756986187304,
       "T": 1.0,
       "T_sd": 0.0,
-      "train_seconds": 6105.6,
-      "train_seconds_sd": 0.0,
+      "train_seconds": 6120.466666666667,
+      "train_seconds_sd": 39.837837960076975,
       "test_errors": {
-        "sustitucion": 31,
-        "omision": 1,
-        "insercion": 6,
-        "multiple": 8,
-        "otro": 2
+        "sustitucion": 101,
+        "multiple": 30,
+        "insercion": 15,
+        "omision": 2,
+        "otro": 7
       }
     }
   ],
@@ -353,26 +438,36 @@
       "a": "parseq_p1-p2-p3",
       "b": "trocr_small_p1-p2-p3",
       "test": {
-        "diff": 0.34666666666666673,
+        "diff": 0.3833333333333333,
         "ci95": [
-          0.24666666666666665,
-          0.44666666666666666
+          0.2966666666666667,
+          0.47
         ],
         "p_gt0": 1.0
       },
       "val": {
-        "diff": 0.25666666666666665,
+        "diff": 0.2466666666666667,
         "ci95": [
-          0.16666666666666663,
-          0.35
+          0.16658333333333336,
+          0.33
         ],
         "p_gt0": 1.0
       },
       "mcnemar_test_by_seed": {
+        "123": {
+          "b": 45,
+          "c": 1,
+          "p": 1.3358203432289883e-12
+        },
         "42": {
           "b": 36,
           "c": 3,
           "p": 3.608874976634979e-08
+        },
+        "7": {
+          "b": 41,
+          "c": 3,
+          "p": 1.6183321349672042e-09
         }
       }
     },
@@ -380,18 +475,18 @@
       "a": "parseq_tiny_p1-p2-p3",
       "b": "trocr_small_p1-p2-p3",
       "test": {
-        "diff": 0.35,
+        "diff": 0.38666666666666666,
         "ci95": [
-          0.25,
-          0.45
+          0.30000000000000004,
+          0.4733333333333334
         ],
         "p_gt0": 1.0
       },
       "val": {
-        "diff": 0.25,
+        "diff": 0.24000000000000005,
         "ci95": [
-          0.15,
-          0.35
+          0.15333333333333335,
+          0.32333333333333336
         ],
         "p_gt0": 1.0
       },
