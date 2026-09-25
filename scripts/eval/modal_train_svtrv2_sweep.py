@@ -55,8 +55,14 @@ def train(model: str, seed: int, phases: str, smoke: bool) -> dict:
 
 
 @app.local_entrypoint()
-def main(model: str = "svtrv2_tiny", seed: int = 42, phases: str = "phase1,phase2,phase3", smoke: bool = False):
-    train.remote(model, seed, phases, smoke)
+def main(model: str = "svtrv2_tiny", seed: int = 42, phases: str = "phase1,phase2,phase3", smoke: bool = False, no_wait: bool = False):
+    # `train.remote` bloquea al cliente hasta el final; si el cliente muere (SIGTERM) la entrada se cancela aunque
+    # la app sea `--detach`. Con `--no-wait` se usa `spawn`: el cliente sale enseguida y la app sigue sola.
+    if no_wait:
+        call = train.spawn(model, seed, phases, smoke)
+        print("spawned", call.object_id)
+    else:
+        train.remote(model, seed, phases, smoke)
 
 
 if __name__ == "__main__":
