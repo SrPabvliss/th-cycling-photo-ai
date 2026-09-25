@@ -34,16 +34,16 @@ image = (
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=4 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
-def train(seed: int, phases: str) -> dict:
+def train(seed: int, phases: str, synthetic: str = "synthetic") -> dict:
     import sys
     sys.path.insert(0, "/root")
     import trocr_sweep_core as core
 
     ph = tuple(phases.split(","))
-    run_name = f"trocr_small_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}"
+    run_name = f"trocr_small_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("" if synthetic == "synthetic" else "_syn2")
     out_dir = Path(VOLUME_PATH) / "runs" / run_name
     meta = core.run(seed, Path(VOLUME_PATH) / "data", out_dir, Path("/root/hf"), phases=ph, device="cuda",
-                    split_csv=Path("/root/split_v2.csv"))
+                    split_csv=Path("/root/split_v2.csv"), synthetic=synthetic)
     volume.commit()
     print({k: meta[k] for k in ("model", "seed", "params_M", "val_em_final", "test_em_final")})
     print({p: (r["best_val_em"], r["best_epoch"], r["train_seconds"]) for p, r in meta["phase_results"].items()})
@@ -51,8 +51,11 @@ def train(seed: int, phases: str) -> dict:
 
 
 @app.local_entrypoint()
-def main(seed: int = 42, phases: str = "phase1,phase2,phase3"):
-    train.remote(seed, phases)
+def main(seed: int = 42, phases: str = "phase1,phase2,phase3", synthetic: str = "synthetic", no_wait: bool = False):
+    if no_wait:
+        print("spawned", train.spawn(seed, phases, synthetic).object_id)
+    else:
+        train.remote(seed, phases, synthetic)
 
 
 if __name__ == "__main__":

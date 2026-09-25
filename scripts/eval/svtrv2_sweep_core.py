@@ -119,6 +119,7 @@ def run(
     device: str = "cuda",
     smoke: bool = False,
     split_csv: Path | None = None,
+    synthetic: str = "synthetic",
 ) -> dict:
     import lmdb as lmdb_lib
     import numpy as np
@@ -224,6 +225,7 @@ def run(
         d = phase_cfg["data"]
         aug = augment if phase_cfg["augment"] else None
         if d in ("synthetic", "svhn"):
+            d = synthetic if d == "synthetic" else d  # v2 = sintético regenerado sin placas vacías (2026-09-25)
             with open_env(str(data_root / d / "lmdb")).begin() as txn:
                 n = int(txn.get(b"num-samples").decode())
             idx = list(range(n))
@@ -285,7 +287,7 @@ def run(
         "pretrained": str(weights_path), "pretrained_sha256": sha256_file(weights_path), "pretrained_keys": pre,
         "openocr_commit": OPENOCR_COMMIT, "torch": torch.__version__,
         "gpu": torch.cuda.get_device_name(0) if device == "cuda" else device,
-        "recipe": RECIPE, "phases": list(phases), "smoke": smoke,
+        "recipe": RECIPE, "phases": list(phases), "smoke": smoke, "synthetic_dir": synthetic,
         "logp_layout": "una fila por dígito emitido (marco voraz), columnas [blank, 0..9]; sin fila EOS",
         "split_v2_sha256": sha256_file(split_csv) if split_csv and split_csv.exists() else None,
         "phase_results": {},

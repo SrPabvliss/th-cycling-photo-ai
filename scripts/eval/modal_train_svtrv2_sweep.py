@@ -37,17 +37,17 @@ image = (
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=3 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
-def train(model: str, seed: int, phases: str, smoke: bool) -> dict:
+def train(model: str, seed: int, phases: str, smoke: bool, synthetic: str = "synthetic") -> dict:
     import sys
     sys.path.insert(0, "/root")
     import svtrv2_sweep_core as core
 
     ph = tuple(phases.split(","))
-    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_smoke" if smoke else "")
+    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_smoke" if smoke else "") + ("" if synthetic == "synthetic" else "_syn2")
     out_dir = Path(VOLUME_PATH) / "runs" / run_name
     meta = core.run(model, seed, Path(VOLUME_PATH) / "data", out_dir, Path("/root/OpenOCR"),
                     Path(VOLUME_PATH) / "weights" / "svtrv2", phases=ph, device="cuda", smoke=smoke,
-                    split_csv=Path("/root/split_v2.csv"))
+                    split_csv=Path("/root/split_v2.csv"), synthetic=synthetic)
     volume.commit()
     print({k: meta[k] for k in ("model", "seed", "params_M", "val_em_final", "test_em_final")})
     print({p: (r["best_val_em"], r["best_epoch"], r["train_seconds"]) for p, r in meta["phase_results"].items()})
@@ -55,14 +55,14 @@ def train(model: str, seed: int, phases: str, smoke: bool) -> dict:
 
 
 @app.local_entrypoint()
-def main(model: str = "svtrv2_tiny", seed: int = 42, phases: str = "phase1,phase2,phase3", smoke: bool = False, no_wait: bool = False):
+def main(model: str = "svtrv2_tiny", seed: int = 42, phases: str = "phase1,phase2,phase3", smoke: bool = False, no_wait: bool = False, synthetic: str = "synthetic"):
     # `train.remote` bloquea al cliente hasta el final; si el cliente muere (SIGTERM) la entrada se cancela aunque
     # la app sea `--detach`. Con `--no-wait` se usa `spawn`: el cliente sale enseguida y la app sigue sola.
     if no_wait:
-        call = train.spawn(model, seed, phases, smoke)
+        call = train.spawn(model, seed, phases, smoke, synthetic)
         print("spawned", call.object_id)
     else:
-        train.remote(model, seed, phases, smoke)
+        train.remote(model, seed, phases, smoke, synthetic)
 
 
 if __name__ == "__main__":

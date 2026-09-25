@@ -158,12 +158,16 @@ def generate_one(text: str, fonts: list[str], size: tuple = (128, 32)) -> Image.
     bg_sample = np.array(bg).mean(axis=(0, 1))
 
     # Font
-    font_path = random.choice(fonts)
     font_size = random.randint(int(h * 0.5), int(h * 0.9))
-    try:
-        font = ImageFont.truetype(font_path, font_size)
-    except Exception:
-        font = ImageFont.load_default()
+    font = None
+    for font_path in random.sample(fonts, len(fonts)):  # corrección 2026-09-25: sin fuente de reserva diminuta
+        try:
+            font = ImageFont.truetype(font_path, font_size)
+            break
+        except Exception:
+            continue
+    if font is None:
+        raise RuntimeError("ninguna fuente carga")
 
     # Text color
     text_color = random_text_color(tuple(int(x) for x in bg_sample))
@@ -196,11 +200,16 @@ def generate_one(text: str, fonts: list[str], size: tuple = (128, 32)) -> Image.
         angle = random.uniform(-8, 8)
         img = img.rotate(angle, expand=False, fillcolor=tuple(int(x) for x in bg_sample))
 
-    # Perspective warp (subtle)
+    # Perspective warp (subtle). Corrección 2026-09-25: la versión original usaba `1 ± 0,05` en los ocho
+    # coeficientes, incluidos los de perspectiva (g, h ≈ 1), lo que colapsaba la imagen a un color liso sin
+    # dígitos en el 30 % de las muestras (v1 del LMDB). Ahora se mueven las cuatro esquinas hasta un 5 %.
     if random.random() < 0.3:
-        coeffs = [1 + random.uniform(-0.05, 0.05) for _ in range(8)]
+        jx, jy = w * 0.05, h * 0.05
+        dst = [(0, 0), (w, 0), (w, h), (0, h)]
+        src = [(x + random.uniform(-jx, jx), y + random.uniform(-jy, jy)) for x, y in dst]
         try:
-            img = img.transform((w, h), Image.PERSPECTIVE, coeffs, Image.BICUBIC)
+            img = img.transform((w, h), Image.PERSPECTIVE, _perspective_coeffs(src, dst), Image.BICUBIC,
+                                fillcolor=tuple(int(x) for x in bg_sample))
         except Exception:
             pass
 
@@ -233,6 +242,17 @@ def generate_one(text: str, fonts: list[str], size: tuple = (128, 32)) -> Image.
         img = Image.fromarray(np.clip(arr + noise, 0, 255).astype(np.uint8))
 
     return img.convert("RGB")
+
+
+def _perspective_coeffs(src, dst):
+    """Coeficientes de `Image.PERSPECTIVE` que llevan `dst` (salida) a `src` (entrada); resuelve el sistema 8x8."""
+    matrix = []
+    for (x, y), (u, v) in zip(dst, src):
+        matrix.append([x, y, 1, 0, 0, 0, -u * x, -u * y])
+        matrix.append([0, 0, 0, x, y, 1, -v * x, -v * y])
+    A = np.array(matrix, dtype=np.float64)
+    B = np.array([c for pt in src for c in pt], dtype=np.float64)
+    return tuple(np.linalg.solve(A, B).tolist())
 
 
 def write_lmdb(output_dir: Path, images: list[tuple[Image.Image, str]]):
@@ -283,11 +303,15 @@ def write_txt_list(output_dir: Path, images: list[tuple[Image.Image, str]]):
 
 
 def main():
+    global OUTPUT_DIR
     parser = argparse.ArgumentParser(description="Generate synthetic bib numbers")
     parser.add_argument("--count", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--preview", action="store_true", help="Save preview grid")
+    parser.add_argument("--out", type=Path, default=OUTPUT_DIR, help="carpeta de salida (v2: data/ocr/synthetic_v2)")
+    parser.add_argument("--no-txt", action="store_true", help="no escribir images/ ni labels.txt (solo LMDB)")
     args = parser.parse_args()
+    OUTPUT_DIR = args.out
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -325,8 +349,9 @@ def main():
     write_lmdb(OUTPUT_DIR, images)
 
     # Write TXT list (PP-OCRv5)
-    print("Writing TXT list format (PP-OCRv5)...")
-    write_txt_list(OUTPUT_DIR, images)
+    if not args.no_txt:
+        print("Writing TXT list format (PP-OCRv5)...")
+        write_txt_list(OUTPUT_DIR, images)
 
     # Stats
     lengths = {}

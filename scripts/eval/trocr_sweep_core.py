@@ -39,7 +39,7 @@ def digit_token_ids(tokenizer) -> tuple[set[int], set[int]]:
 
 
 def run(seed: int, data_root: Path, out_dir: Path, cache_dir: Path, phases=("phase1", "phase2", "phase3"),
-        device: str = "cuda", smoke: bool = False, split_csv: Path | None = None) -> dict:
+        device: str = "cuda", smoke: bool = False, split_csv: Path | None = None, synthetic: str = "synthetic") -> dict:
     import lmdb as lmdb_lib
     import numpy as np
     import torch
@@ -120,6 +120,7 @@ def run(seed: int, data_root: Path, out_dir: Path, cache_dir: Path, phases=("pha
     def datasets_for(cfg):
         d, aug = cfg["data"], (augment if cfg["augment"] else None)
         if d in ("synthetic", "svhn"):
+            d = synthetic if d == "synthetic" else d  # v2 = sintético regenerado sin placas vacías (2026-09-25)
             full = LMDBDataset(data_root / d / "lmdb", aug)
             idx = list(range(len(full)))
             random.Random(seed).shuffle(idx)
@@ -150,7 +151,7 @@ def run(seed: int, data_root: Path, out_dir: Path, cache_dir: Path, phases=("pha
         "model": "trocr_small_printed", "seed": seed, "base": BASE, "params_M": round(n_params, 3),
         "transformers": transformers.__version__, "torch": torch.__version__,
         "gpu": torch.cuda.get_device_name(0) if device == "cuda" else device,
-        "recipe": RECIPE, "phases": list(phases), "smoke": smoke, "constrained_decoding": True,
+        "recipe": RECIPE, "phases": list(phases), "smoke": smoke, "synthetic_dir": synthetic, "constrained_decoding": True,
         "n_allowed_tokens": int(len(allowed)),
         "split_v2_sha256": sha256_file(split_csv) if split_csv and split_csv.exists() else None,
         "phase_results": {},

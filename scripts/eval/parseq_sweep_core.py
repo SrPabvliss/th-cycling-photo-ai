@@ -87,6 +87,7 @@ def run(
     device: str = "cuda",
     smoke: bool = False,
     split_csv: Path | None = None,
+    synthetic: str = "synthetic",
 ) -> dict:
     import lmdb as lmdb_lib
     import numpy as np
@@ -194,6 +195,7 @@ def run(
         d = phase_cfg["data"]
         aug = augment if phase_cfg["augment"] else None
         if d in ("synthetic", "svhn"):
+            d = synthetic if d == "synthetic" else d  # v2 = sintético regenerado sin placas vacías (2026-09-25)
             full = LMDBDataset(data_root / d / "lmdb", aug)
             idx = list(range(len(full)))
             random.Random(seed).shuffle(idx)  # mismo barajado que producción con semilla 42
@@ -227,7 +229,7 @@ def run(
         "charset": CHARSET, "max_label_length": MAX_LEN, "img_size": list(IMG), "params_M": round(n_params, 3),
         "pretrained": WEIGHTS[model_name], "pretrained_keys": pre, "parseq_commit": PARSEQ_COMMIT,
         "torch": torch.__version__, "gpu": torch.cuda.get_device_name(0) if device == "cuda" else device,
-        "recipe": RECIPE, "phases": list(phases), "smoke": smoke,
+        "recipe": RECIPE, "phases": list(phases), "smoke": smoke, "synthetic_dir": synthetic,
         "split_v2_sha256": sha256_file(split_csv) if split_csv and split_csv.exists() else None,
         "phase_results": {},
     }

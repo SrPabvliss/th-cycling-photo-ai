@@ -47,17 +47,17 @@ image = (
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=3 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
-def train(model: str, seed: int, phases: str, decode_ar: bool, refine_iters: int) -> dict:
+def train(model: str, seed: int, phases: str, decode_ar: bool, refine_iters: int, synthetic: str = "synthetic") -> dict:
     import sys
     sys.path.insert(0, "/root")
     import parseq_sweep_core as core
 
     ph = tuple(phases.split(","))
-    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_ar" if decode_ar else "")
+    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_ar" if decode_ar else "") + ("" if synthetic == "synthetic" else "_syn2")
     out_dir = Path(VOLUME_PATH) / "runs" / run_name
     meta = core.run(model, seed, Path(VOLUME_PATH) / "data", out_dir, Path("/root/parseq"), Path("/root/weights"),
                     phases=ph, decode_ar=decode_ar, refine_iters=refine_iters, device="cuda",
-                    split_csv=Path("/root/split_v2.csv"))
+                    split_csv=Path("/root/split_v2.csv"), synthetic=synthetic)
     volume.commit()
     print({k: meta[k] for k in ("model", "seed", "params_M", "val_em_final", "test_em_final")})
     print({p: (r["best_val_em"], r["best_epoch"], r["train_seconds"]) for p, r in meta["phase_results"].items()})
@@ -65,8 +65,11 @@ def train(model: str, seed: int, phases: str, decode_ar: bool, refine_iters: int
 
 
 @app.local_entrypoint()
-def main(model: str = "parseq", seed: int = 42, phases: str = "phase1,phase2,phase3", decode_ar: bool = False, refine_iters: int = 1):
-    train.remote(model, seed, phases, decode_ar, refine_iters)
+def main(model: str = "parseq", seed: int = 42, phases: str = "phase1,phase2,phase3", decode_ar: bool = False, refine_iters: int = 1, synthetic: str = "synthetic", no_wait: bool = False):
+    if no_wait:
+        print("spawned", train.spawn(model, seed, phases, decode_ar, refine_iters, synthetic).object_id)
+    else:
+        train.remote(model, seed, phases, decode_ar, refine_iters, synthetic)
 
 
 if __name__ == "__main__":
