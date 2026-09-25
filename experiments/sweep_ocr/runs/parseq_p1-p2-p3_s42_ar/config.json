@@ -1,0 +1,23 @@
+{
+  "num_tokens": 13,
+  "max_label_length": 4,
+  "charset": "0123456789",
+  "img_size": [
+    32,
+    128
+  ],
+  "patch_size": [
+    4,
+    8
+  ],
+  "embed_dim": 384,
+  "enc_num_heads": 6,
+  "dec_num_heads": 12,
+  "enc_mlp_ratio": 4,
+  "enc_depth": 12,
+  "dec_mlp_ratio": 4,
+  "dec_depth": 1,
+  "decode_ar": true,
+  "refine_iters": 1,
+  "dropout": 0.1
+}
