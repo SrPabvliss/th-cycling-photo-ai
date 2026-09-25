@@ -325,13 +325,16 @@ def run(
                 x = x.to(device)
                 with autocast:
                     logits = model(tokenizer, x)
-                probs = logits.float().softmax(-1).cpu()
-                texts, prob_seqs = tokenizer.decode(probs)
-                for t, ps, g in zip(texts, prob_seqs, gts):
+                logp_all = logits.float().log_softmax(-1).cpu()
+                texts, prob_seqs = tokenizer.decode(logp_all.exp())
+                for t, ps, g, lp in zip(texts, prob_seqs, gts, logp_all):
                     digits = "".join(c for c in t if c.isdigit())
                     per = [float(p) for p in ps.tolist()]
+                    # log-probabilidades por posición (dígitos leídos + EOS) para calibrar por temperatura después
+                    n_pos = len(digits) + 1
                     preds.append({"label": g, "pred": digits, "raw": t, "probs": per[:len(digits)] if digits else per,
-                                  "conf_min": min(per[:len(digits)]) if digits else 0.0})
+                                  "conf_min": min(per[:len(digits)]) if digits else 0.0,
+                                  "logp": [[round(v, 5) for v in row] for row in lp[:n_pos].tolist()]})
         json.dump(preds, open(out_dir / f"preds_{split}.json", "w"))
         em = sum(p["pred"] == p["label"] for p in preds) / max(len(preds), 1)
         meta[f"{split}_em_final"] = em
