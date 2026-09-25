@@ -49,13 +49,25 @@ def confidence(p: dict, T: float = 1.0) -> float:
     return float(probs.max(-1).min())
 
 
+def label_token_ids(label: str) -> list[int]:
+    """Columnas de `logp` (tokenizer de PARSeq): EOS = 0, dígito d = d + 1."""
+    return [int(d) + 1 for d in label] + [0]
+
+
 def fit_temperature(preds: list[dict]) -> float:
-    """T que minimiza la NLL del token predicho en cada posición (val). Búsqueda en malla fina."""
-    rows = [np.asarray(r) for p in preds if p.get("logp") for r in p["logp"][: len(p["pred"]) + 1]]
+    """T que minimiza la NLL de los tokens de la ETIQUETA (dígitos + EOS) en val. Malla fina."""
+    rows, tgts = [], []
+    for p in preds:
+        if not p.get("logp"):
+            continue
+        ids = label_token_ids(p["label"])
+        for r, t in zip(p["logp"][: len(ids)], ids):
+            rows.append(np.asarray(r))
+            tgts.append(t)
     if not rows:
         return 1.0
     L = np.stack(rows)
-    tgt = L.argmax(-1)
+    tgt = np.asarray(tgts)
     best_T, best_nll = 1.0, math.inf
     for T in np.concatenate([np.arange(0.2, 1.0, 0.02), np.arange(1.0, 5.0, 0.05)]):
         z = L / T
