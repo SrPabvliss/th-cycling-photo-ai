@@ -29,7 +29,7 @@ os.environ.setdefault("EVAL_TIMING", "1")
 from modal_inference_eval import image as _base_image  # noqa: E402
 
 # El contenedor importa este archivo de nuevo: monta el módulo base en /root para que el import resuelva.
-image = _base_image.add_local_file(str(Path(__file__).resolve().parent.parent / "modal_inference_eval.py"), "/root/modal_inference_eval.py")  (misma imagen y mismas variables de entorno)
+image = _base_image.add_local_file(str(Path(__file__).resolve().parent.parent / "modal_inference_eval.py"), "/root/modal_inference_eval.py")  # misma imagen y mismas variables de entorno
 
 app = modal.App("eswa-latency-detectors", image=image)
 volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=False)
