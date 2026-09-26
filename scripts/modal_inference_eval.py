@@ -109,7 +109,9 @@ image = (
         "ultralytics==8.4.41",
         "rfdetr==1.10.1",
         "supervision>=0.27.0",
-        "transformers==4.49.0",
+        # rfdetr 1.10.1 requires transformers>=5.1 (TrOCR trained on 4.49.0: parity of the
+        # TrOCR reader on this image is checked with parity_check.py before use).
+        "transformers>=5.1,<6",
         "timm==1.0.26",
         "pytorch-lightning==2.6.1",
         "sentencepiece==0.2.1",
@@ -126,7 +128,7 @@ image = (
         "psutil==7.2.2",
         "requests==2.33.1",
         # D-FINE runtime deps (train extras not needed for inference)
-        "faster-coco-eval>=1.6.6", "loguru", "pycocotools>=2.0.8", "scipy", "calflops",
+        "faster-coco-eval>=1.6.6", "loguru", "pycocotools>=2.0.8", "scipy", "calflops", "tensorboard",
         # cycling_photo_ai.color is imported at module level even with color=none.
         "google-genai==2.3.0",
     )
