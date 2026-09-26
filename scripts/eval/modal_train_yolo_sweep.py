@@ -46,7 +46,8 @@ image = (
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=4 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
-def train(model: str, classes: str, imgsz: int, seed: int, epochs: int | None = None, fixed: bool = False) -> dict:
+def train(model: str, classes: str, imgsz: int, seed: int, epochs: int | None = None, fixed: bool = False,
+          fliplr: float | None = None) -> dict:
     import hashlib
     import json
     import time
@@ -63,6 +64,9 @@ def train(model: str, classes: str, imgsz: int, seed: int, epochs: int | None = 
     if fixed:
         # Protocolo común de la final (2026-09-23): épocas fijas, sin parada temprana; best.pt = mejor época en val
         recipe["patience"] = recipe["epochs"]
+    if fliplr is not None:
+        # Ablación de volteo (P-87, 2026-09-25): la receta congelada lleva fliplr 0.0; aquí se fuerza otro valor
+        recipe["fliplr"] = float(fliplr)
     import shutil
     ds_root = Path(VOLUME_PATH) / "datasets"
     data_yaml = ds_root / f"v4_{classes}" / "data.yaml"
@@ -79,7 +83,7 @@ def train(model: str, classes: str, imgsz: int, seed: int, epochs: int | None = 
     data_vol = data_yaml.parent / "data_vol.yaml"
     yaml.safe_dump(d, open(data_vol, "w"), sort_keys=False)
 
-    run_name = f"{Path(model).stem}_{classes}_{imgsz}_s{seed}" + ("_fx" if fixed else "")
+    run_name = f"{Path(model).stem}_{classes}_{imgsz}_s{seed}" + ("_fx" if fixed else "") + (f"_flip{int(round(fliplr * 10))}" if fliplr is not None else "")
     out_root = Path(VOLUME_PATH) / "runs"
     out_root.mkdir(parents=True, exist_ok=True)
     gpu_name = torch.cuda.get_device_name(0)
@@ -108,7 +112,7 @@ def train(model: str, classes: str, imgsz: int, seed: int, epochs: int | None = 
     meta = {
         "run_name": run_name, "model": model, "classes": classes, "imgsz": imgsz, "seed": seed,
         "ultralytics": ultralytics.__version__, "torch": torch.__version__, "gpu": gpu_name,
-        "train_seconds": round(train_s, 1), "fixed_epochs": fixed, "patience": recipe["patience"], "recipe_sha256": hashlib.sha256(open("/root/recipe_v4.yaml", "rb").read()).hexdigest(),
+        "train_seconds": round(train_s, 1), "fixed_epochs": fixed, "fliplr": recipe.get("fliplr"), "patience": recipe["patience"], "recipe_sha256": hashlib.sha256(open("/root/recipe_v4.yaml", "rb").read()).hexdigest(),
         "split_sha256": hashlib.sha256(open("/root/split.csv", "rb").read()).hexdigest(),
         "params_M": round(sum(p.numel() for p in YOLO(str(best)).model.parameters()) / 1e6, 3),
         "metrics": metrics,
@@ -182,7 +186,7 @@ def latency(run_names: list[str], imgsz: int = 640, n_photos: int = 100) -> dict
 
 @app.local_entrypoint()
 def main(model: str = "yolo11m.pt", classes: str = "c1", imgsz: int = 640, seed: int = 42, epochs: int = 0,
-         models: str = "", seeds: str = "", latency_runs: str = "", fixed: bool = False):
+         models: str = "", seeds: str = "", latency_runs: str = "", fixed: bool = False, fliplr: float = -1.0):
     import json
     """Una corrida (--model) o una tanda (--models "a.pt,b.pt" [--seeds "42,123"]) en paralelo con train.starmap."""
     if latency_runs:
@@ -191,11 +195,12 @@ def main(model: str = "yolo11m.pt", classes: str = "c1", imgsz: int = 640, seed:
     if models or seeds:
         ms = [m.strip() for m in (models or model).split(",") if m.strip()]
         ss = [int(x) for x in (seeds or str(seed)).split(",")]
-        jobs = [(m, classes, imgsz, sd, epochs or None, fixed) for m in ms for sd in ss]
+        fl = None if fliplr < 0 else fliplr
+        jobs = [(m, classes, imgsz, sd, epochs or None, fixed, fl) for m in ms for sd in ss]
         print(f"lanzando {len(jobs)} corridas: {[f'{Path(j[0]).stem}_s{j[3]}' for j in jobs]}")
         for meta in train.starmap(jobs):
             pc = meta["metrics"]["val"]["per_class"].get("competidor_number", {})
             print(f"done {meta['run_name']}: {meta['train_seconds']:.0f}s val AP50 {pc.get('AP50'):.4f} AP50:95 {pc.get('AP50_95'):.4f}")
         return
-    meta = train.remote(model, classes, imgsz, seed, epochs or None, fixed)
+    meta = train.remote(model, classes, imgsz, seed, epochs or None, fixed, None if fliplr < 0 else fliplr)
     print(f"done {meta['run_name']}: val plate AP50 {meta['metrics']['val']['per_class'].get('competidor_number', {}).get('AP50')}")

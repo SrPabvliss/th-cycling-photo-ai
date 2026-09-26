@@ -1,0 +1,10 @@
+{
+  "reader": "svtrv2",
+  "run": "experiments/sweep_ocr/runs/svtrv2_base_p1-p2-p3_s42_syn2",
+  "n": 100,
+  "same_digits": 100,
+  "em_service": 0.96,
+  "em_sweep": 0.96,
+  "max_abs_conf_diff_when_same": 0.028121471405029297,
+  "mismatches": []
+}

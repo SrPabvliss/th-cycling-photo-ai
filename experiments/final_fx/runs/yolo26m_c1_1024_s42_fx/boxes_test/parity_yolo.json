@@ -1,0 +1,10 @@
+{
+  "detector": "yolo",
+  "images": 179,
+  "same_box_count": 179,
+  "ref_boxes": 265,
+  "matched_iou99": 265,
+  "max_abs_score_diff": 5.930662155151367e-06,
+  "unmatched_examples": [],
+  "n_unmatched": 0
+}

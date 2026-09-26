@@ -44,7 +44,8 @@ RECIPE = dict(epochs=80, batch_size=16, grad_accum_steps=1, lr=2e-4, lr_encoder=
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=4 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
-def train(variant: str, resolution: int | None, seed: int, epochs: int | None = None, fixed: bool = False) -> dict:
+def train(variant: str, resolution: int | None, seed: int, epochs: int | None = None, fixed: bool = False,
+          noflip: bool = False) -> dict:
     import hashlib
     import json
     import time
@@ -57,7 +58,7 @@ def train(variant: str, resolution: int | None, seed: int, epochs: int | None = 
     ds = Path(VOLUME_PATH) / "datasets" / "v4_c1_coco"
     assert (ds / "train" / "_annotations.coco.json").exists(), "upload data/v4_c1_coco first"
     res = resolution or NATIVE[variant]
-    run_name = f"rfdetr_{variant}_{res}_s{seed}" + ("_fx" if fixed else "")
+    run_name = f"rfdetr_{variant}_{res}_s{seed}" + ("_fx" if fixed else "") + ("_noflip" if noflip else "")
     out_dir = Path(VOLUME_PATH) / "runs" / run_name
     out_dir.mkdir(parents=True, exist_ok=True)
     cls = {"nano": rfdetr.RFDETRNano, "small": rfdetr.RFDETRSmall, "medium": rfdetr.RFDETRMedium, "large": rfdetr.RFDETRLarge}[variant]
@@ -72,6 +73,9 @@ def train(variant: str, resolution: int | None, seed: int, epochs: int | None = 
     if fixed:
         # Protocolo común de la final (2026-09-23): épocas fijas, sin parada temprana; checkpoint_best_ema = mejor época en val
         recipe["early_stopping"] = False
+    if noflip:
+        # Ablación de volteo (P-87, 2026-09-25): AUG_CONFIG por defecto de rfdetr es solo HorizontalFlip p 0.5; {} lo quita
+        recipe["aug_config"] = {}
     t0 = time.time()
     model.train(dataset_dir=str(ds), output_dir=str(out_dir), seed=seed, **recipe)
     train_s = time.time() - t0
@@ -168,10 +172,10 @@ def latency(run_names: list[str]) -> dict:
 
 
 @app.local_entrypoint()
-def main(models: str = "medium", seeds: str = "42", resolution: int = 0, epochs: int = 0, latency_runs: str = "", fixed: bool = False):
+def main(models: str = "medium", seeds: str = "42", resolution: int = 0, epochs: int = 0, latency_runs: str = "", fixed: bool = False, noflip: bool = False):
     if latency_runs:
         latency.remote([r.strip() for r in latency_runs.split(",") if r.strip()]); return
-    jobs = [(m.strip(), resolution or None, int(s), epochs or None, fixed) for m in models.split(",") for s in seeds.split(",")]
+    jobs = [(m.strip(), resolution or None, int(s), epochs or None, fixed, noflip) for m in models.split(",") for s in seeds.split(",")]
     print(f"lanzando {len(jobs)}: {[f'{j[0]}_{j[1] or NATIVE[j[0]]}_s{j[2]}' for j in jobs]}")
     for meta in train.starmap(jobs):
         print(f"done {meta['run_name']}: {meta['train_seconds']:.0f}s")

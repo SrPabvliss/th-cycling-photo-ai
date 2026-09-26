@@ -62,6 +62,9 @@ class RfdetrDetector:
         weights_path: str | None = None,
         keep_all_classes: bool = False,
         legacy_6class: bool = False,
+        variant: str | None = None,
+        resolution: int | None = None,
+        class_names: list[str] | None = None,
     ) -> None:
         """
         Args:
@@ -86,17 +89,27 @@ class RfdetrDetector:
             "RFDETR_WEIGHTS", str(default_weights)
         )
         self._keep_all_classes = keep_all_classes
+        # ESWA evaluation (P-82): variant, resolution and class list of the
+        # selected checkpoint. RFDETR_CLASSES="competidor_number" for the
+        # single-class `_fx` runs of the selection study.
+        self._variant = variant or os.environ.get("RFDETR_VARIANT", "medium")
+        self._resolution = resolution or (int(os.environ.get("RFDETR_RES", "0")) or None)
+        if class_names:
+            self._class_names = list(class_names)
+        elif os.environ.get("RFDETR_CLASSES"):
+            self._class_names = [c.strip() for c in os.environ["RFDETR_CLASSES"].split(",") if c.strip()]
         self._model = None
 
     def _load(self) -> None:
-        from rfdetr import RFDETRMedium
+        import rfdetr
 
+        cls = {"nano": "RFDETRNano", "small": "RFDETRSmall", "medium": "RFDETRMedium", "large": "RFDETRLarge"}[self._variant]
+        kwargs = dict(pretrain_weights=self._weights_path, num_classes=len(self._class_names))
+        if self._resolution:
+            kwargs["resolution"] = self._resolution
         # num_classes determined by class list; rfdetr accepts either based on
         # checkpoint shape, but pass it explicitly for safety.
-        self._model = RFDETRMedium(
-            pretrain_weights=self._weights_path,
-            num_classes=len(self._class_names),
-        )
+        self._model = getattr(rfdetr, cls)(**kwargs)
 
     def detect(self, image_path: str) -> list[Detection]:
         # Respect EXIF orientation (Sony A7S III + others store rotation tag).

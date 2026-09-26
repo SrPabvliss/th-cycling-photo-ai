@@ -60,6 +60,22 @@ CONCURRENT = 1 if TIMING else int(os.environ.get("EVAL_CONCURRENT", "4"))
 CPU = 4.0 if TIMING else float(os.environ.get("EVAL_CPU", "2"))
 
 
+import json as _json
+
+DEFAULT_EVAL_DETECTORS = _json.dumps({
+    "yolo26m_1024": {"kind": "yolo", "weights": "/vol/weights/yolo26m_c1_1024_s42_fx/best.pt", "imgsz": 1024},
+    "yolo11m_640_fx": {"kind": "yolo", "weights": "/vol/weights/yolo11m_c1_640_s42_fx/best.pt", "imgsz": 640},
+    "rfdetr_l_896": {"kind": "rfdetr", "weights": "/vol/weights/rfdetr_large_896_s42_fx/checkpoint_best_ema.pth",
+                     "variant": "large", "resolution": 896, "classes": ["competidor_number"]},
+    "dfine_l_640": {"kind": "dfine", "weights": "/vol/weights/dfine_l_640_s42/best_stg2.pth",
+                    "config": "/vol/weights/dfine_l_640_s42/config_eswa.yml", "resolution": 640},
+})
+DEFAULT_EVAL_READERS = _json.dumps({
+    "svtrv2_b": {"kind": "svtrv2", "weights": "/vol/weights/svtrv2_base_syn2_s42"},
+    "parseq_v2": {"kind": "parseq", "weights": "/vol/weights/parseq_base_syn2_s42"},
+})
+
+
 def _local_commit() -> str:
     try:
         out = subprocess.run(
@@ -73,15 +89,26 @@ def _local_commit() -> str:
         return "unknown"
 
 
+# Library versions (2026-09-25, P-82). Rule: the service must reproduce the
+# evaluator that produced the selection tables.
+#  - torch 2.14 (+cu130): the training images of YOLO, RF-DETR and D-FINE.
+#  - ultralytics 8.4.41: version of `eval_boxes.py` that evaluated every YOLO
+#    checkpoint (trained with 8.4.160); parity verified locally 265/265 boxes.
+#  - rfdetr 1.10.1 and D-FINE 956d1709: the training images produced
+#    `dt_*.json` themselves, so the service must run the same libraries.
+#  - PARSeq / SVTRv2 / TrOCR trained on torch 2.5.1; readers verified 100/100
+#    on torch 2.11 locally (parity_check.py).
+DFINE_COMMIT = "956d1709314c2c6a4df6f34de232054578a7449f"
+OPENOCR_COMMIT = "1ccfc6e"
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("libgl1-mesa-glx", "libglib2.0-0", "git")
+    .apt_install("libgl1-mesa-glx", "libglib2.0-0", "git", "wget")
     .pip_install(
-        "torch==2.11.0",
-        "torchvision==0.26.0",
+        "torch==2.14.0",
+        "torchvision==0.29.0",
         "ultralytics==8.4.41",
-        "rfdetr==1.5.2",
-        "supervision==0.27.0.post2",
+        "rfdetr==1.10.1",
+        "supervision>=0.27.0",
         "transformers==4.49.0",
         "timm==1.0.26",
         "pytorch-lightning==2.6.1",
@@ -92,18 +119,22 @@ image = (
         "scikit-learn==1.8.0",
         "opencv-python-headless==4.10.0.84",
         "pillow==12.2.0",
-        "numpy==2.4.4",
+        "numpy",
         "fastapi[standard]==0.136.0",
         "pydantic==2.13.3",
         "httpx==0.28.1",
         "psutil==7.2.2",
         "requests==2.33.1",
+        # D-FINE runtime deps (train extras not needed for inference)
+        "faster-coco-eval>=1.6.6", "loguru", "pycocotools>=2.0.8", "scipy", "calflops",
         # cycling_photo_ai.color is imported at module level even with color=none.
         "google-genai==2.3.0",
     )
     .run_commands(
         "python -c \"import torch; "
         "torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True)\"",
+        f"git clone https://github.com/Peterande/D-FINE.git /opt/dfine && cd /opt/dfine && git checkout {DFINE_COMMIT}",
+        f"git clone https://github.com/Topdu/OpenOCR /root/OpenOCR && cd /root/OpenOCR && git checkout {OPENOCR_COMMIT}",
     )
     .env(
         {
@@ -115,10 +146,17 @@ image = (
             "WARMUP_INFERENCE": "1",
             "WARMUP_ALL": "1" if TIMING else "0",
             "AI_GIT_COMMIT": _local_commit(),
+            # Production rows (as deployed)
             "YOLO_WEIGHTS": "/vol/weights/yolo11m_v3cleaned/best.pt",
             "RFDETR_WEIGHTS": "/vol/weights/rfdetr_v3cleaned/best.pth",
             "PARSEQ_WEIGHTS": "/vol/weights/parseq_4phase",
             "TROCR_WEIGHTS": "/vol/weights/trocr_bib_4phase/best",
+            # Representatives of the selection study (P-82): named configurations,
+            # weights uploaded to the volume under /vol/weights/<name>/.
+            "DFINE_DIR": "/opt/dfine",
+            "OPENOCR_DIR": "/root/OpenOCR",
+            "EVAL_DETECTORS": os.environ.get("EVAL_DETECTORS", DEFAULT_EVAL_DETECTORS),
+            "EVAL_READERS": os.environ.get("EVAL_READERS", DEFAULT_EVAL_READERS),
             "TOKENIZERS_PARALLELISM": "false",
             # Bib crops requested with ?crop_dir= land here; fetch them with
             #   modal volume get cycling-photo-ai-eval-vol /crops/<dir> ./crops

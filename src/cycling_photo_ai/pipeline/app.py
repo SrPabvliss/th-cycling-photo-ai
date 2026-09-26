@@ -55,8 +55,20 @@ DEFAULT_OCR = os.environ.get("OCR_TYPE", "parseq")
 # academic reference only; not exposed as a runtime option.
 DEFAULT_COLOR = os.environ.get("COLOR_STRATEGY_TYPE", "gemini")
 
-AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy")
-AVAILABLE_OCRS = ("parseq", "trocr")
+# ESWA evaluation (P-82): extra named configurations, one per selected
+# checkpoint, declared as JSON so one app can hold every pair of the chained
+# run. Example:
+#   EVAL_DETECTORS='{"yolo26m_1024": {"kind": "yolo", "weights": "/vol/weights/yolo26m_1024_fx/best.pt", "imgsz": 1024},
+#                    "rfdetr_l_896": {"kind": "rfdetr", "weights": "/vol/weights/rfdetr_l_896_fx/checkpoint_best_ema.pth",
+#                                     "variant": "large", "resolution": 896, "classes": ["competidor_number"]},
+#                    "dfine_l_640": {"kind": "dfine", "weights": "...best_stg2.pth", "config": "...config_eswa.yml", "resolution": 640}}'
+#   EVAL_READERS='{"svtrv2_b": {"kind": "svtrv2", "weights": "/vol/weights/svtrv2_base_syn2"},
+#                  "parseq_v2": {"kind": "parseq", "weights": "/vol/weights/parseq_base_syn2"}}'
+import json as _json
+EXTRA_DETECTORS: dict[str, dict] = _json.loads(os.environ.get("EVAL_DETECTORS", "{}"))
+EXTRA_READERS: dict[str, dict] = _json.loads(os.environ.get("EVAL_READERS", "{}"))
+AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy", "dfine", *EXTRA_DETECTORS)
+AVAILABLE_OCRS = ("parseq", "trocr", "svtrv2", *EXTRA_READERS)
 AVAILABLE_COLORS = ("gemini", "none")
 
 # Identify this process and count the requests it served per detector/ocr pair,
@@ -153,6 +165,23 @@ def _get_detector(detector_type: str = DEFAULT_DETECTOR) -> IDetector:
     elif detector_type == "rfdetr_legacy":
         from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
         det = RfdetrDetector(legacy_6class=True)
+    elif detector_type == "dfine":
+        from cycling_photo_ai.detection.inference.dfine_detector import DfineDetector
+        det = DfineDetector()
+    elif detector_type in EXTRA_DETECTORS:
+        c = EXTRA_DETECTORS[detector_type]
+        if c["kind"] == "yolo":
+            from cycling_photo_ai.detection.inference.yolo_detector import YoloDetector
+            det = YoloDetector(weights_path=c["weights"], imgsz=c.get("imgsz"))
+        elif c["kind"] == "rfdetr":
+            from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
+            det = RfdetrDetector(weights_path=c["weights"], variant=c.get("variant"),
+                                 resolution=c.get("resolution"), class_names=c.get("classes"))
+        elif c["kind"] == "dfine":
+            from cycling_photo_ai.detection.inference.dfine_detector import DfineDetector
+            det = DfineDetector(weights_path=c["weights"], config_path=c.get("config"), resolution=c.get("resolution"))
+        else:
+            raise ValueError(f"Unknown detector kind {c['kind']!r} for {detector_type!r}")
     else:
         raise ValueError(
             f"Unknown detector_type={detector_type!r}. "
@@ -174,6 +203,22 @@ def _get_bib_reader(reader_type: str = DEFAULT_OCR) -> IBibReader:
     elif reader_type == "trocr":
         from cycling_photo_ai.ocr.inference.trocr_reader import TrOCRBibReader
         rd = TrOCRBibReader()
+    elif reader_type == "svtrv2":
+        from cycling_photo_ai.ocr.inference.svtrv2_reader import SVTRv2Reader
+        rd = SVTRv2Reader()
+    elif reader_type in EXTRA_READERS:
+        c = EXTRA_READERS[reader_type]
+        if c["kind"] == "svtrv2":
+            from cycling_photo_ai.ocr.inference.svtrv2_reader import SVTRv2Reader
+            rd = SVTRv2Reader(weights_dir=c["weights"])
+        elif c["kind"] == "parseq":
+            from cycling_photo_ai.ocr.inference.parseq_reader import PARSeqReader
+            rd = PARSeqReader(weights_dir=c["weights"])
+        elif c["kind"] == "trocr":
+            from cycling_photo_ai.ocr.inference.trocr_reader import TrOCRBibReader
+            rd = TrOCRBibReader(weights_path=c["weights"])
+        else:
+            raise ValueError(f"Unknown reader kind {c['kind']!r} for {reader_type!r}")
     else:
         raise ValueError(
             f"Unknown reader_type={reader_type!r}. "

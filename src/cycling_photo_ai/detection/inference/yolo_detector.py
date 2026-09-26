@@ -42,6 +42,7 @@ class YoloDetector:
         self,
         weights_path: str | None = None,
         keep_all_classes: bool = False,
+        imgsz: int | None = None,
     ) -> None:
         """
         Args:
@@ -55,6 +56,9 @@ class YoloDetector:
             "YOLO_WEIGHTS", str(WEIGHTS_DIR / "yolo11m_v3cleaned" / "best.pt")
         )
         self._keep_all_classes = keep_all_classes
+        # Inference side: the selection study evaluated each configuration at
+        # its training resolution (eval_boxes.py --imgsz); default 640.
+        self._imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "640"))
         self._model = None
 
     def _load(self) -> None:
@@ -80,9 +84,9 @@ class YoloDetector:
             self._load()
 
         if conf is None:
-            results = self._model(img, verbose=False)
+            results = self._model(img, imgsz=self._imgsz, verbose=False)
         else:
-            results = self._model(img, conf=conf, verbose=False)
+            results = self._model(img, imgsz=self._imgsz, conf=conf, verbose=False)
         detections: list[Detection] = []
 
         for result in results:
@@ -91,9 +95,13 @@ class YoloDetector:
             img_w, img_h = img.size
             for box in result.boxes:
                 cls_id = int(box.cls[0])
+                # Class names come from the checkpoint (ultralytics stores them):
+                # the 5-class production model and the single-class `_fx`
+                # checkpoints of the selection study differ (P-82).
+                model_names = getattr(self._model, "names", None) or {}
                 class_name = (
-                    CLASS_NAMES[cls_id]
-                    if cls_id < len(CLASS_NAMES)
+                    model_names[cls_id] if cls_id in model_names
+                    else CLASS_NAMES[cls_id] if cls_id < len(CLASS_NAMES)
                     else f"class_{cls_id}"
                 )
                 if not self._keep_all_classes and class_name not in KEPT_CLASSES:

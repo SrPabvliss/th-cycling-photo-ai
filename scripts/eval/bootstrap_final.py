@@ -85,4 +85,11 @@ for x, y in PAIRS:
     r = {"a": x, "b": y, "diff": point[x] - point[y], "ci95": [float(np.percentile(d, 2.5)), float(np.percentile(d, 97.5))], "p_gt0": float(np.mean(d > 0))}
     res["pairs"].append(r)
     print(f"{x:>14s} − {y:<14s} {r['diff']:+.4f}  IC95 [{r['ci95'][0]:+.4f}, {r['ci95'][1]:+.4f}]  P(>0) {r['p_gt0']:.3f}")
+# P-89 (2026-09-25): p bilateral del bootstrap y corrección de Holm sobre todas las comparaciones
+for r in res["pairs"]:
+    r["p_two_sided"] = min(1.0, 2 * min(r["p_gt0"], 1 - r["p_gt0"]))
+order = sorted(range(len(res["pairs"])), key=lambda i: res["pairs"][i]["p_two_sided"]); m = len(order); prev = 0.0
+for rank, i in enumerate(order):
+    prev = max(prev, min(1.0, (m - rank) * res["pairs"][i]["p_two_sided"])); res["pairs"][i]["p_holm"] = prev
+res["multiple_comparisons"] = "p_two_sided = 2*min(P(d>0), P(d<0)); p_holm = Holm sobre todas las comparaciones"
 json.dump(res, open(F / f"final_fx/bootstrap_final_{a.split}.json", "w"), indent=2)

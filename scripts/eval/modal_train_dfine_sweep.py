@@ -86,7 +86,7 @@ DATA_BY_RES = {640: "v4_c1_coco_800", 800: "v4_c1_coco_1000"}   # copia reducida
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=6 * 3600, volumes={VOLUME_PATH: volume}, cpu=16, memory=32768)
-def train(variant: str, seed: int, res: int = 640) -> dict:
+def train(variant: str, seed: int, res: int = 640, noflip: bool = False) -> dict:
     import hashlib
     import json
     import os
@@ -97,18 +97,22 @@ def train(variant: str, seed: int, res: int = 640) -> dict:
     import torch
 
     ds = f"{VOLUME_PATH}/datasets/{DATA_BY_RES[res]}"   # copia reducida (lado mayor 800; D-FINE entrena a 640): D-FINE decodifica en CPU a resolución completa; con 12 Mpx tardaba 14 s por lote
-    run_name = f"dfine_{variant}_{res}_s{seed}"
+    run_name = f"dfine_{variant}_{res}_s{seed}" + ("_noflip" if noflip else "")
     out = Path(VOLUME_PATH) / "runs" / run_name
     out.mkdir(parents=True, exist_ok=True)
     cfg_path = out / "config_eswa.yml"
     cfg_text = CFG_TEMPLATE.format(v=variant, out=str(out), ds=ds)
-    if res != 640:   # fusión profunda (un segundo train_dataloader en el mismo yml pisaría el primero entero)
+    if res != 640 or noflip:   # fusión profunda (un segundo train_dataloader en el mismo yml pisaría el primero entero)
         import yaml
+        res_cfg = CFG_RES.format(r=res)
+        if noflip:
+            # Ablación de volteo (P-87, 2026-09-25): mismas ops oficiales sin RandomHorizontalFlip
+            res_cfg = "\n".join(l for l in res_cfg.splitlines() if "RandomHorizontalFlip" not in l)
         def merge(a, b):
             for k, v in b.items():
                 a[k] = merge(a[k], v) if isinstance(v, dict) and isinstance(a.get(k), dict) else v
             return a
-        cfg_text = yaml.safe_dump(merge(yaml.safe_load(cfg_text), yaml.safe_load(CFG_RES.format(r=res))), sort_keys=False)
+        cfg_text = yaml.safe_dump(merge(yaml.safe_load(cfg_text), yaml.safe_load(res_cfg)), sort_keys=False)
     cfg_path.write_text(cfg_text)
     commit = open("/opt/dfine/COMMIT").read().strip()
     gpu_name = torch.cuda.get_device_name(0)
@@ -154,7 +158,7 @@ def train(variant: str, seed: int, res: int = 640) -> dict:
     meta = {"run_name": run_name, "family": "dfine", "variant": variant, "resolution": res, "seed": seed, "commit": commit,
             "torch": torch.__version__, "gpu": gpu_name, "train_seconds": round(train_s, 1), "best_checkpoint": best.name,
             "pretrain": WEIGHTS[variant], "params_M": round(sum(p.numel() for p in cfg.model.parameters()) / 1e6, 3),
-            "split_sha256": hashlib.sha256(open("/root/split.csv", "rb").read()).hexdigest(),
+            "split_sha256": hashlib.sha256(open("/root/split.csv", "rb").read()).hexdigest(), "horizontal_flip": not noflip,
             "recipe": f"configs/dfine/custom/dfine_hgnetv2_{variant}_custom.yml (oficial) con total_batch_size 16, epochs 80 (policy 72), datos a {DATA_BY_RES[res]}, entrada {res}, -t coco, --use-amp"}
     json.dump(meta, open(out / "run_meta.json", "w"), indent=2)
     volume.commit()
@@ -238,10 +242,10 @@ def latency(run_names: list[str]) -> dict:
 
 
 @app.local_entrypoint()
-def main(models: str = "s", seeds: str = "42", latency_runs: str = "", res: int = 640):
+def main(models: str = "s", seeds: str = "42", latency_runs: str = "", res: int = 640, noflip: bool = False):
     if latency_runs:
         latency.remote([r.strip() for r in latency_runs.split(",") if r.strip()]); return
-    jobs = [(m.strip(), int(s), res) for m in models.split(",") for s in seeds.split(",")]
-    print(f"lanzando {len(jobs)}: {[f'dfine_{j[0]}_{res}_s{j[1]}' for j in jobs]}")
+    jobs = [(m.strip(), int(s), res, noflip) for m in models.split(",") for s in seeds.split(",")]
+    print(f"lanzando {len(jobs)}: {[f'dfine_{j[0]}_{res}_s{j[1]}' + ('_noflip' if noflip else '') for j in jobs]}")
     for meta in train.starmap(jobs):
         print(f"done {meta['run_name']}: {meta['train_seconds']:.0f}s")

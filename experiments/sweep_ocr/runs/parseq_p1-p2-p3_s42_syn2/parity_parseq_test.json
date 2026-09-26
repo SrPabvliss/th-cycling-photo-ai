@@ -1,0 +1,10 @@
+{
+  "reader": "parseq",
+  "run": "experiments/sweep_ocr/runs/parseq_p1-p2-p3_s42_syn2",
+  "n": 100,
+  "same_digits": 100,
+  "em_service": 0.85,
+  "em_sweep": 0.85,
+  "max_abs_conf_diff_when_same": 0.005768716335296631,
+  "mismatches": []
+}
