@@ -19,6 +19,7 @@ ROWS = [  # (etiqueta, familia, resolución, carpetas de corrida)
     ("YOLO11m (producción)", "YOLO", 640, [F / f"final_fx/runs/yolo11m_c1_640_s{s}_fx" for s in S]),
     ("YOLO11m", "YOLO", 1024, [F / f"final_fx/runs/yolo11m_c1_1024_s{s}_fx" for s in S]),
     ("YOLO26m", "YOLO", 1024, [F / f"final_fx/runs/yolo26m_c1_1024_s{s}_fx" for s in S]),
+    ("YOLO26l (control)", "YOLO", 1024, [F / f"final_fx/runs/yolo26l_c1_1024_s{s}_fx" for s in S]),  # P-91
     ("RF-DETR-M (producción)", "RF-DETR", 576, [F / f"final_fx/rfdetr/rfdetr_medium_576_s{s}_fx" for s in S]),
     ("RF-DETR-L", "RF-DETR", 896, [F / f"final_fx/rfdetr/rfdetr_large_896_s{s}_fx" for s in S]),
     ("D-FINE-L", "D-FINE", 640, [F / f"sweep_dfine/dfine_l_640_s{s}" for s in S]),
