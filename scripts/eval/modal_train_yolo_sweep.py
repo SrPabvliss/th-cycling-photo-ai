@@ -30,7 +30,9 @@ from pathlib import Path
 import modal
 
 ULTRALYTICS_VERSION = "8.4.160"
-GPU_TRAIN = "A100-40GB"   # entrenamiento (decisión 2026-09-22 §8); latencia se mide en L4 con latency_gpu.py
+import os
+GPU_TRAIN = os.environ.get("YOLO_GPU", "A100-40GB")   # entrenamiento (decisión 2026-09-22 §8); latencia se mide en L4 con latency_gpu.py
+# YOLO_GPU=A100-80GB para variantes l a 1024 con lote 32 (26l se queda sin memoria en 40 GB; ultralytics bajaría el lote a 16 y rompería el protocolo). Se declara, como en D-FINE.
 VOL_NAME = "cycling-photo-ai-sweep-vol"
 VOLUME_PATH = "/vol"
 
