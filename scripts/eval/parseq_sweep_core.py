@@ -88,12 +88,14 @@ def run(
     smoke: bool = False,
     split_csv: Path | None = None,
     synthetic: str = "synthetic",
+    letterbox: bool = False,
 ) -> dict:
     import lmdb as lmdb_lib
     import numpy as np
     import torch
     import torch.nn.functional as F
     import torchvision.transforms as T
+    import torchvision.transforms.functional as TF
     from PIL import Image
     from torch.utils.data import DataLoader, Dataset, Subset
 
@@ -152,7 +154,23 @@ def run(
         return content_mask, mask[1:, :-1]
 
     # ---- datos ----
-    transform = T.Compose([T.Resize(IMG), T.ToTensor(), T.Normalize(0.5, 0.5)])
+    # Política de entrada. Oficial de PARSeq: aplastar a 32×128 (4:1) sin conservar proporción.
+    # `letterbox` (ablación P-85): rellenar con gris (127) hasta relación 4:1 conservando proporción, luego 32×128.
+    # El relleno gris cae a 0 tras Normalize(0.5, 0.5), es decir, entrada neutra donde no hay imagen.
+    target_ratio = IMG[1] / IMG[0]
+
+    def pad_to_ratio(img):
+        w, h = img.size
+        if w / h < target_ratio:
+            new_w = int(math.ceil(h * target_ratio)); pad = new_w - w
+            return TF.pad(img, [pad // 2, 0, pad - pad // 2, 0], fill=127)
+        if w / h > target_ratio:
+            new_h = int(math.ceil(w / target_ratio)); pad = new_h - h
+            return TF.pad(img, [0, pad // 2, 0, pad - pad // 2], fill=127)
+        return img
+
+    steps = ([T.Lambda(pad_to_ratio)] if letterbox else []) + [T.Resize(IMG), T.ToTensor(), T.Normalize(0.5, 0.5)]
+    transform = T.Compose(steps)
     augment = T.Compose([
         T.RandomAffine(degrees=8, translate=(0.05, 0.05), scale=(0.9, 1.1), shear=5),
         T.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2),
@@ -227,6 +245,8 @@ def run(
     meta = {
         "model": model_name, "seed": seed, "decode_ar": decode_ar, "refine_iters": refine_iters,
         "charset": CHARSET, "max_label_length": MAX_LEN, "img_size": list(IMG), "params_M": round(n_params, 3),
+        "input": ("letterbox gris 127 a 4:1 conservando proporción, luego 32x128" if letterbox else "resize directo a 32x128 (oficial PARSeq)"),
+        "letterbox": letterbox,
         "pretrained": WEIGHTS[model_name], "pretrained_keys": pre, "parseq_commit": PARSEQ_COMMIT,
         "torch": torch.__version__, "gpu": torch.cuda.get_device_name(0) if device == "cuda" else device,
         "recipe": RECIPE, "phases": list(phases), "smoke": smoke, "synthetic_dir": synthetic,

@@ -47,17 +47,17 @@ image = (
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=3 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
-def train(model: str, seed: int, phases: str, decode_ar: bool, refine_iters: int, synthetic: str = "synthetic") -> dict:
+def train(model: str, seed: int, phases: str, decode_ar: bool, refine_iters: int, synthetic: str = "synthetic", letterbox: bool = False) -> dict:
     import sys
     sys.path.insert(0, "/root")
     import parseq_sweep_core as core
 
     ph = tuple(phases.split(","))
-    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_ar" if decode_ar else "") + ("" if synthetic == "synthetic" else "_syn2")
+    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_ar" if decode_ar else "") + ("" if synthetic == "synthetic" else "_syn2") + ("_lb" if letterbox else "")
     out_dir = Path(VOLUME_PATH) / "runs" / run_name
     meta = core.run(model, seed, Path(VOLUME_PATH) / "data", out_dir, Path("/root/parseq"), Path("/root/weights"),
                     phases=ph, decode_ar=decode_ar, refine_iters=refine_iters, device="cuda",
-                    split_csv=Path("/root/split_v2.csv"), synthetic=synthetic)
+                    split_csv=Path("/root/split_v2.csv"), synthetic=synthetic, letterbox=letterbox)
     volume.commit()
     print({k: meta[k] for k in ("model", "seed", "params_M", "val_em_final", "test_em_final")})
     print({p: (r["best_val_em"], r["best_epoch"], r["train_seconds"]) for p, r in meta["phase_results"].items()})
@@ -65,11 +65,11 @@ def train(model: str, seed: int, phases: str, decode_ar: bool, refine_iters: int
 
 
 @app.local_entrypoint()
-def main(model: str = "parseq", seed: int = 42, phases: str = "phase1,phase2,phase3", decode_ar: bool = False, refine_iters: int = 1, synthetic: str = "synthetic", no_wait: bool = False):
+def main(model: str = "parseq", seed: int = 42, phases: str = "phase1,phase2,phase3", decode_ar: bool = False, refine_iters: int = 1, synthetic: str = "synthetic", no_wait: bool = False, letterbox: bool = False):
     if no_wait:
-        print("spawned", train.spawn(model, seed, phases, decode_ar, refine_iters, synthetic).object_id)
+        print("spawned", train.spawn(model, seed, phases, decode_ar, refine_iters, synthetic, letterbox).object_id)
     else:
-        train.remote(model, seed, phases, decode_ar, refine_iters, synthetic)
+        train.remote(model, seed, phases, decode_ar, refine_iters, synthetic, letterbox)
 
 
 if __name__ == "__main__":
@@ -80,6 +80,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--local-smoke", action="store_true")
     ap.add_argument("--model", default="parseq_tiny")
+    ap.add_argument("--letterbox", action="store_true")
     a = ap.parse_args()
     if a.local_smoke:
         sys.path.insert(0, "scripts/eval")
@@ -96,5 +97,5 @@ if __name__ == "__main__":
         repo = Path(glob.glob(str(Path.home() / ".cache/torch/hub/baudm_parseq*"))[0])
         meta = core.run(a.model, 42, data, root / "experiments" / "ocr_split_v2" / "smoke_run", repo,
                         Path.home() / ".cache/torch/hub/checkpoints", phases=("phase1", "phase3"), device="cpu",
-                        smoke=True, split_csv=root / "experiments" / "ocr_split_v2" / "split.csv")
+                        smoke=True, split_csv=root / "experiments" / "ocr_split_v2" / "split.csv", letterbox=a.letterbox)
         print("smoke ok", meta["params_M"], meta["val_em_final"])

@@ -37,17 +37,17 @@ image = (
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=3 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
-def train(model: str, seed: int, phases: str, smoke: bool, synthetic: str = "synthetic") -> dict:
+def train(model: str, seed: int, phases: str, smoke: bool, synthetic: str = "synthetic", fixed_shape: str = "") -> dict:
     import sys
     sys.path.insert(0, "/root")
     import svtrv2_sweep_core as core
 
     ph = tuple(phases.split(","))
-    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_smoke" if smoke else "") + ("" if synthetic == "synthetic" else "_syn2")
+    run_name = f"{model}_{'-'.join(p.replace('phase', 'p') for p in ph)}_s{seed}" + ("_smoke" if smoke else "") + ("" if synthetic == "synthetic" else "_syn2") + (f"_fix{fixed_shape}" if fixed_shape else "")
     out_dir = Path(VOLUME_PATH) / "runs" / run_name
     meta = core.run(model, seed, Path(VOLUME_PATH) / "data", out_dir, Path("/root/OpenOCR"),
                     Path(VOLUME_PATH) / "weights" / "svtrv2", phases=ph, device="cuda", smoke=smoke,
-                    split_csv=Path("/root/split_v2.csv"), synthetic=synthetic)
+                    split_csv=Path("/root/split_v2.csv"), synthetic=synthetic, fixed_shape=fixed_shape or None)
     volume.commit()
     print({k: meta[k] for k in ("model", "seed", "params_M", "val_em_final", "test_em_final")})
     print({p: (r["best_val_em"], r["best_epoch"], r["train_seconds"]) for p, r in meta["phase_results"].items()})
@@ -55,14 +55,14 @@ def train(model: str, seed: int, phases: str, smoke: bool, synthetic: str = "syn
 
 
 @app.local_entrypoint()
-def main(model: str = "svtrv2_tiny", seed: int = 42, phases: str = "phase1,phase2,phase3", smoke: bool = False, no_wait: bool = False, synthetic: str = "synthetic"):
+def main(model: str = "svtrv2_tiny", seed: int = 42, phases: str = "phase1,phase2,phase3", smoke: bool = False, no_wait: bool = False, synthetic: str = "synthetic", fixed_shape: str = ""):
     # `train.remote` bloquea al cliente hasta el final; si el cliente muere (SIGTERM) la entrada se cancela aunque
     # la app sea `--detach`. Con `--no-wait` se usa `spawn`: el cliente sale enseguida y la app sigue sola.
     if no_wait:
-        call = train.spawn(model, seed, phases, smoke, synthetic)
+        call = train.spawn(model, seed, phases, smoke, synthetic, fixed_shape or None)
         print("spawned", call.object_id)
     else:
-        train.remote(model, seed, phases, smoke, synthetic)
+        train.remote(model, seed, phases, smoke, synthetic, fixed_shape or None)
 
 
 if __name__ == "__main__":
@@ -73,6 +73,7 @@ if __name__ == "__main__":
     ap.add_argument("--local-smoke", action="store_true")
     ap.add_argument("--model", default="svtrv2_tiny")
     ap.add_argument("--openocr", default=str(Path.home() / "thesis/projects/OpenOCR"))
+    ap.add_argument("--fixed-shape", default="")
     a = ap.parse_args()
     if a.local_smoke:
         sys.path.insert(0, "scripts/eval")
@@ -88,5 +89,5 @@ if __name__ == "__main__":
             (data / "synthetic" / "lmdb").symlink_to(root / "data" / "ocr" / "synthetic" / "lmdb")
         meta = core.run(a.model, 42, data, root / "experiments" / "ocr_split_v2" / "smoke_run_svtrv2", Path(a.openocr),
                         root / "weights" / "svtrv2", phases=("phase1", "phase3"), device="cpu", smoke=True,
-                        split_csv=root / "experiments" / "ocr_split_v2" / "split.csv")
+                        split_csv=root / "experiments" / "ocr_split_v2" / "split.csv", fixed_shape=a.fixed_shape or None)
         print("smoke ok", meta["params_M"], meta["pretrained_keys"]["missing"], meta["pretrained_keys"]["unexpected"], meta["val_em_final"])

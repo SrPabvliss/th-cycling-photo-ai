@@ -120,6 +120,7 @@ def run(
     smoke: bool = False,
     split_csv: Path | None = None,
     synthetic: str = "synthetic",
+    fixed_shape: str | None = None,
 ) -> dict:
     import lmdb as lmdb_lib
     import numpy as np
@@ -133,6 +134,16 @@ def run(
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+    # Política de entrada. Por defecto MSR (un bucket por relación de aspecto). Con `fixed_shape` ("128x32", ablación P-85)
+    # todos los recortes van a una sola forma: se sobrescribe la tabla de formas con la fija y todo cae en r = 1.
+    if fixed_shape:
+        fw, fh = (int(x) for x in fixed_shape.lower().split("x"))
+        SHAPES = ((fw, fh),) * MAX_RATIO
+        FIXED_R = 1
+    else:
+        SHAPES = BASE_SHAPE
+        FIXED_R = 0
 
     Encoder, Decoder = load_openocr(repo_dir)
     model = build_model(Encoder, Decoder, model_name)
@@ -172,7 +183,7 @@ def run(
                 self.buckets = []
                 for i in self.indices:
                     w, h = Image.open(io.BytesIO(txn.get(f"image-{i+1:09d}".encode()))).size
-                    self.buckets.append(ratio_bucket(w, h))
+                    self.buckets.append(FIXED_R if FIXED_R else ratio_bucket(w, h))
 
         def __len__(self):
             return len(self.indices)
@@ -188,7 +199,7 @@ def run(
             if self.aug:
                 img = self.aug(img)
             r = self.buckets[j]
-            W, H = BASE_SHAPE[r - 1]
+            W, H = SHAPES[r - 1]
             img = TF.resize(img, (H, W), interpolation=T.InterpolationMode.BICUBIC)
             label = "".join(c for c in label if c.isdigit())[:MAX_LEN]
             return to_tensor(img), label, r, i
@@ -282,7 +293,10 @@ def run(
 
     meta = {
         "model": model_name, "family": "SVTRv2 (CTC)", "seed": seed, "charset": CHARSET, "max_label_length": MAX_LEN,
-        "num_classes": NUM_CLASSES, "input": "MSR por relación de aspecto: r=round(w/h) en [1,4] → " + ", ".join(f"{w}x{h}" for w, h in BASE_SHAPE),
+        "num_classes": NUM_CLASSES,
+        "input": (f"entrada fija {SHAPES[FIXED_R - 1][0]}x{SHAPES[FIXED_R - 1][1]} sin MSR (ablación P-85)" if FIXED_R
+                  else "MSR por relación de aspecto: r=round(w/h) en [1,4] → " + ", ".join(f"{w}x{h}" for w, h in BASE_SHAPE)),
+        "fixed_shape": fixed_shape,
         "params_M": round(n_params, 3), "arch": {**ARCH[model_name], **ARCH_COMMON},
         "pretrained": str(weights_path), "pretrained_sha256": sha256_file(weights_path), "pretrained_keys": pre,
         "openocr_commit": OPENOCR_COMMIT, "torch": torch.__version__,
@@ -368,7 +382,7 @@ def run(
         json.dump(meta, open(out_dir / "run_meta.json", "w"), indent=2)
 
     json.dump({"model": model_name, "num_classes": NUM_CLASSES, "charset": CHARSET, "max_label_length": MAX_LEN,
-               "base_shape": BASE_SHAPE, "max_ratio": MAX_RATIO, "arch": {**ARCH[model_name], **ARCH_COMMON},
+               "base_shape": SHAPES, "max_ratio": MAX_RATIO, "fixed_shape": fixed_shape, "arch": {**ARCH[model_name], **ARCH_COMMON},
                "decoder": "RCTCDecoder", "openocr_commit": OPENOCR_COMMIT},
               open(out_dir / "config.json", "w"), indent=2)
 
