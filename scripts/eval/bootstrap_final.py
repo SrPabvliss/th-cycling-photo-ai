@@ -22,6 +22,7 @@ CONFIGS = {
     "YOLO26m@1024": [F / f"final_fx/runs/yolo26m_c1_1024_s{s}_fx" for s in (42, 123, 7)],
     "YOLO26m@640": [F / f"final_fx/runs/yolo26m_c1_640_s{s}_fx" for s in (42, 123, 7)],   # P-86 (2026-09-25)
     "YOLO26l@1024": [F / f"final_fx/runs/yolo26l_c1_1024_s{s}_fx" for s in (42, 123, 7)],  # P-91 (2026-09-28), A100 80 GB
+    "D-FINE-L@640 sin volteo": [F / f"final_fx/dfine/dfine_l_640_s{s}_noflip" for s in (42, 123, 7)],  # P-87 (2026-09-28)
     "YOLO11m@1024": [F / f"final_fx/runs/yolo11m_c1_1024_s{s}_fx" for s in (42, 123, 7)],
     "YOLO11m@640": [F / f"final_fx/runs/yolo11m_c1_640_s{s}_fx" for s in (42, 123, 7)],
     "RF-DETR-M@576": [F / f"final_fx/rfdetr/rfdetr_medium_576_s{s}_fx" for s in (42, 123, 7)],
@@ -29,7 +30,8 @@ CONFIGS = {
 PAIRS = [("D-FINE-L@640", "RF-DETR-L@896"), ("YOLO26m@1024", "RF-DETR-L@896"), ("YOLO26m@1024", "D-FINE-L@640"),
          ("YOLO26m@1024", "YOLO11m@1024"), ("YOLO11m@1024", "YOLO11m@640"), ("RF-DETR-L@896", "RF-DETR-M@576"),
          ("YOLO11m@640", "RF-DETR-M@576"), ("YOLO26m@1024", "YOLO26m@640"), ("YOLO26m@640", "YOLO11m@640"),
-         ("YOLO26l@1024", "YOLO26m@1024"), ("YOLO26l@1024", "D-FINE-L@640"), ("YOLO26l@1024", "RF-DETR-L@896")]
+         ("YOLO26l@1024", "YOLO26m@1024"), ("YOLO26l@1024", "D-FINE-L@640"), ("YOLO26l@1024", "RF-DETR-L@896"),
+         ("D-FINE-L@640 sin volteo", "D-FINE-L@640"), ("D-FINE-L@640 sin volteo", "YOLO26m@1024"), ("D-FINE-L@640 sin volteo", "RF-DETR-L@896")]
 ap_ = argparse.ArgumentParser(); ap_.add_argument("--boot", type=int, default=2000); ap_.add_argument("--seed", type=int, default=0); ap_.add_argument("--split", default="test")
 a = ap_.parse_args()
 IOUS = np.linspace(0.5, 0.95, 10); REC = np.linspace(0, 1, 101)
