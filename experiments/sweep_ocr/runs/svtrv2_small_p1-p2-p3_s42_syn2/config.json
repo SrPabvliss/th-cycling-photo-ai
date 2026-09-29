@@ -1,0 +1,96 @@
+{
+  "model": "svtrv2_small",
+  "num_classes": 11,
+  "charset": "0123456789",
+  "max_label_length": 4,
+  "base_shape": [
+    [
+      64,
+      64
+    ],
+    [
+      96,
+      48
+    ],
+    [
+      112,
+      40
+    ],
+    [
+      128,
+      32
+    ]
+  ],
+  "max_ratio": 4,
+  "fixed_shape": null,
+  "arch": {
+    "dims": [
+      96,
+      192,
+      384
+    ],
+    "depths": [
+      3,
+      6,
+      3
+    ],
+    "num_heads": [
+      3,
+      6,
+      12
+    ],
+    "mixer": [
+      [
+        "Conv",
+        "Conv",
+        "Conv"
+      ],
+      [
+        "Conv",
+        "Conv",
+        "Conv",
+        "FGlobal",
+        "Global",
+        "Global"
+      ],
+      [
+        "Global",
+        "Global",
+        "Global"
+      ]
+    ],
+    "use_pos_embed": false,
+    "local_k": [
+      [
+        5,
+        5
+      ],
+      [
+        5,
+        5
+      ],
+      [
+        -1,
+        -1
+      ]
+    ],
+    "sub_k": [
+      [
+        1,
+        1
+      ],
+      [
+        2,
+        1
+      ],
+      [
+        -1,
+        -1
+      ]
+    ],
+    "last_stage": false,
+    "feat2d": true
+  },
+  "decoder": "RCTCDecoder",
+  "openocr_commit": "1ccfc6e"
+}
