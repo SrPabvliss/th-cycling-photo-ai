@@ -99,6 +99,9 @@ class RfdetrDetector:
         elif os.environ.get("RFDETR_CLASSES"):
             self._class_names = [c.strip() for c in os.environ["RFDETR_CLASSES"].split(",") if c.strip()]
         self._model = None
+        # Timing of the last detect_image call (model forward only), see YoloDetector.
+        self.last_timing: dict[str, float] = {}
+        self._forward_t0 = 0.0
 
     def _load(self) -> None:
         import rfdetr
@@ -110,6 +113,30 @@ class RfdetrDetector:
         # num_classes determined by class list; rfdetr accepts either based on
         # checkpoint shape, but pass it explicitly for safety.
         self._model = getattr(rfdetr, cls)(**kwargs)
+        self._install_timing_hooks()
+
+    def _install_timing_hooks(self) -> None:
+        """Measure the forward of the inner network (RFDETR -> Model -> nn.Module)
+        with cuda synchronization; predict() keeps doing the preprocessing."""
+        import time
+
+        import torch
+
+        net = getattr(getattr(self._model, "model", None), "model", None)
+        if net is None or not hasattr(net, "register_forward_pre_hook"):
+            return
+        sync = torch.cuda.synchronize if torch.cuda.is_available() else (lambda: None)
+
+        def pre(_m, _inp):
+            sync()
+            self._forward_t0 = time.perf_counter()
+
+        def post(_m, _inp, _out):
+            sync()
+            self.last_timing = {"model_ms": (time.perf_counter() - self._forward_t0) * 1000}
+
+        net.register_forward_pre_hook(pre)
+        net.register_forward_hook(post)
 
     def detect(self, image_path: str) -> list[Detection]:
         # Respect EXIF orientation (Sony A7S III + others store rotation tag).

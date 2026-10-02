@@ -60,6 +60,9 @@ class YoloDetector:
         # its training resolution (eval_boxes.py --imgsz); default 640.
         self._imgsz = int(imgsz or os.environ.get("YOLO_IMGSZ", "640"))
         self._model = None
+        # Timing of the last detect_image call, for the evaluation service:
+        # model forward apart from the library's own image preprocessing.
+        self.last_timing: dict[str, float] = {}
 
     def _load(self) -> None:
         from ultralytics import YOLO
@@ -88,6 +91,13 @@ class YoloDetector:
         else:
             results = self._model(img, imgsz=self._imgsz, conf=conf, verbose=False)
         detections: list[Detection] = []
+        speed = getattr(results[0], "speed", None) if len(results) else None
+        if speed:
+            self.last_timing = {
+                "model_ms": float(speed.get("inference") or 0.0),
+                "pre_ms": float(speed.get("preprocess") or 0.0),
+                "post_ms": float(speed.get("postprocess") or 0.0),
+            }
 
         for result in results:
             if result.boxes is None:

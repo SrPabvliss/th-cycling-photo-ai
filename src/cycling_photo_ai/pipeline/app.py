@@ -14,6 +14,7 @@ or via env defaults:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import itertools
 import os
@@ -26,6 +27,7 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Query
+from pydantic import BaseModel
 
 from cycling_photo_ai.color.strategies.base import ColorAnalysisStrategy
 from cycling_photo_ai.detection.inference.ports import IDetector
@@ -111,15 +113,22 @@ async def lifespan(app: FastAPI):
     # Timing studies load every local detector/reader pair in one process so
     # the four combinations are measured on the same host.
     if os.environ.get("WARMUP_ALL", "0") == "1":
-        for det_name in ("yolo", "rfdetr_v3"):
-            for ocr_name in AVAILABLE_OCRS:
-                det, rd = _get_detector(det_name), _get_bib_reader(ocr_name)
-                if not det.is_loaded():
-                    det._load()
-                if not rd.is_loaded():
-                    rd._load()
-                _run_warmup_inference(det, rd)
-        print("[lifespan] All four pairs warm.", flush=True)
+        # EVAL_WARMUP_PAIRS="det:ocr,..." names the pairs of the chained run;
+        # without it, the production detectors x every reader (first study).
+        pairs_env = os.environ.get("EVAL_WARMUP_PAIRS", "")
+        pairs = (
+            [tuple(p.split(":", 1)) for p in pairs_env.split(",") if ":" in p]
+            if pairs_env
+            else [(d, o) for d in ("yolo", "rfdetr_v3") for o in AVAILABLE_OCRS]
+        )
+        for det_name, ocr_name in pairs:
+            det, rd = _get_detector(det_name), _get_bib_reader(ocr_name)
+            if not det.is_loaded():
+                det._load()
+            if not rd.is_loaded():
+                rd._load()
+            _run_warmup_inference(det, rd)
+        print(f"[lifespan] {len(pairs)} pairs warm: {pairs}", flush=True)
 
     print("[lifespan] All models warm.", flush=True)
 
@@ -266,20 +275,74 @@ def _get_orchestrator(detector_type: str, reader_type: str, color_type: str = "n
     return orch
 
 
-async def _resolve_image(image_url: str) -> str:
-    """If image_url is an HTTP(S) URL, download to temp file and return path."""
-    if not image_url.startswith(("http://", "https://")):
-        return image_url
+# Evaluation only (EVAL_IMAGE_CACHE > 0): the serial driver sends the same photo
+# to every detector x reader pair in a row with the same signed URL, so the
+# download happens once per photo instead of once per pair. Keyed by URL, a
+# few entries, oldest evicted and its file removed. Off in production.
+_IMAGE_CACHE_SIZE = int(os.environ.get("EVAL_IMAGE_CACHE", "0"))
+_image_cache: dict[str, str] = {}
+# URL -> download in progress (POST /prefetch or a concurrent first request),
+# so the same photo is never fetched twice.
+_image_downloads: dict[str, "asyncio.Task[str]"] = {}
 
+
+async def _download_image(image_url: str) -> str:
     async with httpx.AsyncClient() as client:
         response = await client.get(image_url, timeout=60.0, follow_redirects=True)
         response.raise_for_status()
-
     suffix = Path(image_url.split("?")[0]).suffix or ".jpg"
     tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
     tmp.write(response.content)
     tmp.close()
+    if _IMAGE_CACHE_SIZE:
+        _image_cache[image_url] = tmp.name
+        while len(_image_cache) > _IMAGE_CACHE_SIZE:
+            oldest = next(iter(_image_cache))
+            Path(_image_cache.pop(oldest)).unlink(missing_ok=True)
     return tmp.name
+
+
+async def _resolve_image(image_url: str) -> str:
+    """If image_url is an HTTP(S) URL, download to temp file and return path."""
+    if not image_url.startswith(("http://", "https://")):
+        return image_url
+    if not _IMAGE_CACHE_SIZE:
+        return await _download_image(image_url)
+    if image_url in _image_cache:
+        return _image_cache[image_url]
+    task = _image_downloads.get(image_url)
+    if task is None:
+        task = asyncio.create_task(_download_image(image_url))
+        _image_downloads[image_url] = task
+    try:
+        return await task
+    finally:
+        _image_downloads.pop(image_url, None)
+
+
+def _release_image(image_path: str, image_url: str) -> None:
+    """Remove the temp file unless the cache still owns it."""
+    if image_path == image_url or image_path in _image_cache.values():
+        return
+    Path(image_path).unlink(missing_ok=True)
+
+
+class PrefetchRequest(BaseModel):
+    image_url: str
+
+
+@app.post("/prefetch")
+async def prefetch(request: PrefetchRequest) -> dict[str, Any]:
+    """Evaluation only: start downloading a photo into the image cache so the
+    next /pipeline calls for it find the bytes on disk. Bytes only, no decode,
+    no GPU; the serial driver sends it for photo k+1 while photo k runs."""
+    if not _IMAGE_CACHE_SIZE:
+        return {"status": "cache_disabled"}
+    url = request.image_url
+    if url in _image_cache or url in _image_downloads:
+        return {"status": "already"}
+    _image_downloads[url] = asyncio.create_task(_download_image(url))
+    return {"status": "started"}
 
 
 @app.post("/pipeline", response_model=PipelineResponse)
@@ -333,8 +396,7 @@ async def pipeline(
             crop_name=request.image_id,
         )
     finally:
-        if image_path != request.image_url:
-            Path(image_path).unlink(missing_ok=True)
+        _release_image(image_path, request.image_url)
 
     return PipelineResponse(
         image_id=request.image_id,
@@ -348,6 +410,7 @@ async def pipeline(
             total_ms=result.processing_ms,
             decode_ms=result.decode_ms,
             detection_ms=result.detection_ms,
+            detection_model_ms=result.detection_model_ms,
             preprocess_ms=result.preprocess_ms,
             ocr_ms=result.ocr_ms,
             color_ms=result.color_ms,
@@ -404,8 +467,7 @@ async def color_analyze(
         result = strat.analyze(rgba)
         elapsed = (time.perf_counter() - t0) * 1000
     finally:
-        if image_path != request.image_url:
-            Path(image_path).unlink(missing_ok=True)
+        _release_image(image_path, request.image_url)
 
     return {
         "primary_color": result.primary_color,
@@ -437,8 +499,7 @@ async def detect(model_id: str, request: PipelineRequest) -> Any:
         detections = detector_obj.detect(image_path)
         elapsed_ms = (time.perf_counter() - start) * 1000
     finally:
-        if image_path != request.image_url:
-            Path(image_path).unlink(missing_ok=True)
+        _release_image(image_path, request.image_url)
 
     filtered = [d for d in detections if d.confidence >= request.confidence_threshold]
     return {

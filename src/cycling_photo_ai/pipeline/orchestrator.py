@@ -87,6 +87,7 @@ class PipelineResult:
     processing_ms: float = 0.0
     decode_ms: float = 0.0
     detection_ms: float = 0.0
+    detection_model_ms: float | None = None  # detector forward only, when the adapter reports it
     preprocess_ms: float = 0.0
     ocr_ms: float = 0.0
     color_ms: float = 0.0
@@ -231,6 +232,7 @@ class PipelineOrchestrator:
         else:
             raw_detections = self._detector.detect(image_path)
         detection_ms = (time.perf_counter() - det_start) * 1000
+        detection_model_ms = (getattr(self._detector, "last_timing", None) or {}).get("model_ms")
         detections = [d for d in raw_detections if d.confidence >= det_threshold]
         det_notes: list[str] = []
         if not detections:
@@ -526,6 +528,7 @@ class PipelineOrchestrator:
             processing_ms=round(elapsed_ms, 2),
             decode_ms=round(decode_ms, 2),
             detection_ms=round(detection_ms, 2),
+            detection_model_ms=round(detection_model_ms, 2) if detection_model_ms is not None else None,
             preprocess_ms=round(preprocess_ms_total, 2),
             ocr_ms=round(ocr_ms_total, 2),
             color_ms=round(color_ms_total, 2),

@@ -147,6 +147,8 @@ image = (
             "OCR_PREPROCESS": OCR_PREPROCESS,
             "WARMUP_INFERENCE": "1",
             "WARMUP_ALL": "1" if TIMING else "0",
+            "EVAL_IMAGE_CACHE": "4" if TIMING else "0",
+            "EVAL_WARMUP_PAIRS": os.environ.get("EVAL_WARMUP_PAIRS", ""),
             "AI_GIT_COMMIT": _local_commit(),
             # Production rows (as deployed)
             "YOLO_WEIGHTS": "/vol/weights/yolo11m_v3cleaned/best.pt",
@@ -188,7 +190,8 @@ volume = modal.Volume.from_name("cycling-photo-ai-eval-vol", create_if_missing=F
     cpu=CPU,
     memory=16384 if TIMING else 8192,
     volumes={"/vol": volume},
-    scaledown_window=1800 if TIMING else 300,
+    # Serial driver never leaves gaps; a long window only bills idle GPU.
+    scaledown_window=60 if TIMING else 300,
     max_containers=MAX_CONTAINERS,
     timeout=300,
 )

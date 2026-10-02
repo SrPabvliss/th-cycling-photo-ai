@@ -105,6 +105,7 @@ class StageTimings(BaseModel):
     total_ms: float = Field(description="Full pipeline wall-clock ms (= PipelineResponse.processing_ms)")
     decode_ms: float = Field(default=0.0, description="Image decode + EXIF orientation ms. Not part of detection_ms.")
     detection_ms: float = Field(default=0.0, description="Detection stage ms (single call): detector preprocessing, inference and postprocessing on the decoded image")
+    detection_model_ms: float | None = Field(default=None, description="Detector forward pass only (cuda-synced), inside detection_ms; None when the adapter does not report it")
     preprocess_ms: float = Field(default=0.0, description="Crop preprocessing ms (sum of per-item BibReadingItem.preprocess_ms)")
     ocr_ms: float = Field(default=0.0, description="OCR stage ms (sum of per-item BibReadingItem.processing_ms)")
     color_ms: float = Field(default=0.0, description="Color stage ms (sum of per-item ColorAnalysisItem.processing_ms)")
