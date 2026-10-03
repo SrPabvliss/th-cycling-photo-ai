@@ -42,6 +42,8 @@ class DfineDetector:
         self._res = int(resolution or os.environ.get("DFINE_RES", "640"))
         self._repo_dir = repo_dir or os.environ.get("DFINE_DIR", "/opt/dfine")
         self._model = None
+        # Timing of the last detect_image call (model forward only), see YoloDetector.
+        self.last_timing: dict[str, float] = {}
         self._post = None
         self._tf = None
         self._device = None
@@ -79,8 +81,16 @@ class DfineDetector:
         w, h = image.size
         x = self._tf(image).unsqueeze(0).to(self._device)
         sz = torch.tensor([[w, h]]).to(self._device)
+        sync = torch.cuda.synchronize if self._device == "cuda" or str(self._device).startswith("cuda") else (lambda: None)
+        import time
+
         with torch.no_grad():
-            labels, boxes, scores = self._post(self._model(x), sz)
+            sync()
+            t0 = time.perf_counter()
+            raw = self._model(x)
+            sync()
+            self.last_timing = {"model_ms": (time.perf_counter() - t0) * 1000}
+            labels, boxes, scores = self._post(raw, sz)
         out: list[Detection] = []
         for lab, box, sc in zip(labels[0].tolist(), boxes[0].tolist(), scores[0].tolist()):
             if conf is not None and sc < conf:
