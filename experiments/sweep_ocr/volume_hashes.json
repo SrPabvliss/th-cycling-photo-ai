@@ -3,10 +3,7 @@
     "sha256": "78f16a06486dc9ddb1bcc7d76542ee5f3c895412e2f3d6430f1c7cf5e62fd213",
     "bytes": 1931751424
   },
-  "data/synthetic/lmdb/data.mdb": {
-    "sha256": "ed8662cf5a72f63a6c200a48b9791381aa6fed6f2c29bfc3390b164fee3b9301",
-    "bytes": 1232748544
-  },
+  "data/synthetic/lmdb/data.mdb": null,
   "data/synthetic_v2/lmdb/data.mdb": {
     "sha256": "f2bd76f296b2136a3fbf205b10cd7b7b9936e506fce58fb511fbff94ea5ccd0f",
     "bytes": 1454899200
