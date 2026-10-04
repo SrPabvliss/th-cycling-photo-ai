@@ -45,7 +45,7 @@ RECIPE = dict(epochs=80, batch_size=16, grad_accum_steps=1, lr=2e-4, lr_encoder=
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=4 * 3600, volumes={VOLUME_PATH: volume}, cpu=8, memory=32768)
 def train(variant: str, resolution: int | None, seed: int, epochs: int | None = None, fixed: bool = False,
-          noflip: bool = False) -> dict:
+          noflip: bool = False, classes: str = "c1") -> dict:
     import hashlib
     import json
     import time
@@ -55,10 +55,12 @@ def train(variant: str, resolution: int | None, seed: int, epochs: int | None = 
     from importlib.metadata import version as _v
     from PIL import Image
 
-    ds = Path(VOLUME_PATH) / "datasets" / "v4_c1_coco"
-    assert (ds / "train" / "_annotations.coco.json").exists(), "upload data/v4_c1_coco first"
+    # P-97 (2026-10-04): ablación de conjunto de clases para los ganadores; c5 = las 5 etiquetas de producción
+    ds = Path(VOLUME_PATH) / "datasets" / f"v4_{classes}_coco"
+    assert (ds / "train" / "_annotations.coco.json").exists(), f"upload data/v4_{classes}_coco first"
+    n_classes = len(json.load(open(ds / "train" / "_annotations.coco.json"))["categories"])
     res = resolution or NATIVE[variant]
-    run_name = f"rfdetr_{variant}_{res}_s{seed}" + ("_fx" if fixed else "") + ("_noflip" if noflip else "")
+    run_name = f"rfdetr_{variant}_{res}_s{seed}" + ("_fx" if fixed else "") + ("_noflip" if noflip else "") + (f"_{classes}" if classes != "c1" else "")
     out_dir = Path(VOLUME_PATH) / "runs" / run_name
     out_dir.mkdir(parents=True, exist_ok=True)
     cls = {"nano": rfdetr.RFDETRNano, "small": rfdetr.RFDETRSmall, "medium": rfdetr.RFDETRMedium, "large": rfdetr.RFDETRLarge}[variant]
@@ -66,7 +68,7 @@ def train(variant: str, resolution: int | None, seed: int, epochs: int | None = 
     print(f"rfdetr {_v('rfdetr')} torch {torch.__version__} GPU {gpu_name} run {run_name} res {res}")
 
     torch.manual_seed(seed)
-    model = cls(num_classes=1, resolution=res)
+    model = cls(num_classes=n_classes, resolution=res)
     recipe = dict(RECIPE)
     if epochs:
         recipe["epochs"] = epochs
@@ -84,7 +86,7 @@ def train(variant: str, resolution: int | None, seed: int, epochs: int | None = 
     best = out_dir / "checkpoint_best_ema.pth"
     if not best.exists():
         best = out_dir / "checkpoint_best_total.pth"
-    m = cls(num_classes=1, resolution=res, pretrain_weights=str(best))
+    m = cls(num_classes=n_classes, resolution=res, pretrain_weights=str(best))
     m.optimize_for_inference() if hasattr(m, "optimize_for_inference") else None
     for split, folder in (("val", "valid"), ("test", "test")):
         paths = sorted(p for p in (ds / folder).iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
@@ -96,7 +98,7 @@ def train(variant: str, resolution: int | None, seed: int, epochs: int | None = 
                 dets.append({"image_id": i, "category_id": int(c), "bbox": [x1, y1, x2 - x1, y2 - y1], "score": float(s)})
         json.dump(dets, open(out_dir / f"dt_{split}.json", "w"))
         print(f"{split}: {len(paths)} imgs, {len(dets)} dets")
-    meta = {"run_name": run_name, "family": "rfdetr", "variant": variant, "resolution": res, "seed": seed,
+    meta = {"run_name": run_name, "family": "rfdetr", "variant": variant, "resolution": res, "seed": seed, "classes": classes,
             "rfdetr": _v("rfdetr"), "torch": torch.__version__, "gpu": gpu_name, "train_seconds": round(train_s, 1),
             "recipe": recipe, "split_sha256": hashlib.sha256(open("/root/split.csv", "rb").read()).hexdigest(),
             "params_M": round(sum(p.numel() for p in m.model.model.parameters()) / 1e6, 3) if hasattr(m, "model") and hasattr(m.model, "model") else None,
@@ -172,10 +174,10 @@ def latency(run_names: list[str]) -> dict:
 
 
 @app.local_entrypoint()
-def main(models: str = "medium", seeds: str = "42", resolution: int = 0, epochs: int = 0, latency_runs: str = "", fixed: bool = False, noflip: bool = False):
+def main(models: str = "medium", seeds: str = "42", resolution: int = 0, epochs: int = 0, latency_runs: str = "", fixed: bool = False, noflip: bool = False, classes: str = "c1"):
     if latency_runs:
         latency.remote([r.strip() for r in latency_runs.split(",") if r.strip()]); return
-    jobs = [(m.strip(), resolution or None, int(s), epochs or None, fixed, noflip) for m in models.split(",") for s in seeds.split(",")]
+    jobs = [(m.strip(), resolution or None, int(s), epochs or None, fixed, noflip, classes) for m in models.split(",") for s in seeds.split(",")]
     print(f"lanzando {len(jobs)}: {[f'{j[0]}_{j[1] or NATIVE[j[0]]}_s{j[2]}' for j in jobs]}")
     for meta in train.starmap(jobs):
         print(f"done {meta['run_name']}: {meta['train_seconds']:.0f}s")
