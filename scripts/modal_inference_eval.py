@@ -69,6 +69,11 @@ DEFAULT_EVAL_DETECTORS = _json.dumps({
                      "variant": "large", "resolution": 896, "classes": ["competidor_number"]},
     "dfine_l_640": {"kind": "dfine", "weights": "/vol/weights/dfine_l_640_s42/best_stg2.pth",
                     "config": "/vol/weights/dfine_l_640_s42/config_eswa.yml", "resolution": 640},
+    # P-97 (2026-10-04): the two finalists retrained with the 5 production labels; the service keeps only competidor_number
+    "yolo26m_c5_1024": {"kind": "yolo", "weights": "/vol/weights/yolo26m_c5_1024_s42_fx/best.pt", "imgsz": 1024},
+    "rfdetr_l_896_c5": {"kind": "rfdetr", "weights": "/vol/weights/rfdetr_large_896_s42_fx_c5/checkpoint_best_ema.pth",
+                        "variant": "large", "resolution": 896,
+                        "classes": ["bicycle", "competidor_number", "cyclist_clothes", "cyclist_with_bike", "helmet"]},
 })
 DEFAULT_EVAL_READERS = _json.dumps({
     "svtrv2_b": {"kind": "svtrv2", "weights": "/vol/weights/svtrv2_base_syn2_s42"},
