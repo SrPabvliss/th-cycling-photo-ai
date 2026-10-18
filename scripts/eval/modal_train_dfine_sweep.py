@@ -35,7 +35,7 @@ image = (
 
 CFG_TEMPLATE = """__include__: ['/opt/dfine/configs/dfine/custom/dfine_hgnetv2_{v}_custom.yml']
 output_dir: {out}
-num_classes: 2   # ids 0 (placa); margen de 1 por la convención 0-based de nuestro COCO
+num_classes: {ncls}   # c1: 2 (id 0 placa + margen de 1 por la convención 0-based de nuestro COCO); c5: 6
 remap_mscoco_category: False
 epochs: 80        # mismo presupuesto de épocas para S, M y L (= receta oficial de L y = RF-DETR); las oficiales de S (220) y M (132) no caben en presupuesto
 train_dataloader:
@@ -82,11 +82,11 @@ val_dataloader:
         - {{type: Resize, size: [{r}, {r}]}}
         - {{type: ConvertPILImage, dtype: 'float32', scale: True}}
 """
-DATA_BY_RES = {640: "v4_c1_coco_800", 800: "v4_c1_coco_1000"}   # copia reducida a 1,25 × la resolución de entrada
+DATA_BY_RES = {640: "v4_{c}_coco_800", 800: "v4_{c}_coco_1000"}   # copia reducida a 1,25 × la resolución de entrada; {c} = c1 o c5 (P-111)
 
 
 @app.function(image=image, gpu=GPU_TRAIN, timeout=6 * 3600, volumes={VOLUME_PATH: volume}, cpu=16, memory=32768)
-def train(variant: str, seed: int, res: int = 640, noflip: bool = False) -> dict:
+def train(variant: str, seed: int, res: int = 640, noflip: bool = False, classes: str = "c1") -> dict:
     import hashlib
     import json
     import os
@@ -96,12 +96,13 @@ def train(variant: str, seed: int, res: int = 640, noflip: bool = False) -> dict
 
     import torch
 
-    ds = f"{VOLUME_PATH}/datasets/{DATA_BY_RES[res]}"   # copia reducida (lado mayor 800; D-FINE entrena a 640): D-FINE decodifica en CPU a resolución completa; con 12 Mpx tardaba 14 s por lote
-    run_name = f"dfine_{variant}_{res}_s{seed}" + ("_noflip" if noflip else "")
+    ds = f"{VOLUME_PATH}/datasets/{DATA_BY_RES[res].format(c=classes)}"
+    ncls = len(json.load(open(f"{ds}/train/_annotations.coco.json"))["categories"]) + 1   # margen 0-based, como antes (c1 → 2)   # copia reducida (lado mayor 800; D-FINE entrena a 640): D-FINE decodifica en CPU a resolución completa; con 12 Mpx tardaba 14 s por lote
+    run_name = f"dfine_{variant}_{res}_s{seed}" + ("_noflip" if noflip else "") + (f"_{classes}" if classes != "c1" else "")
     out = Path(VOLUME_PATH) / "runs" / run_name
     out.mkdir(parents=True, exist_ok=True)
     cfg_path = out / "config_eswa.yml"
-    cfg_text = CFG_TEMPLATE.format(v=variant, out=str(out), ds=ds)
+    cfg_text = CFG_TEMPLATE.format(v=variant, out=str(out), ds=ds, ncls=ncls)
     if res != 640 or noflip:   # fusión profunda (un segundo train_dataloader en el mismo yml pisaría el primero entero)
         import yaml
         res_cfg = CFG_RES.format(r=res)
@@ -141,7 +142,7 @@ def train(variant: str, seed: int, res: int = 640, noflip: bool = False) -> dict
     model = cfg.model.deploy().cuda().eval()
     post = cfg.postprocessor.deploy()
     tf = T.Compose([T.Resize((res, res)), T.ToTensor()])
-    ds_full = f"{VOLUME_PATH}/datasets/v4_c1_coco"   # detecciones sobre las fotos originales (píxeles originales, como el resto de familias)
+    ds_full = f"{VOLUME_PATH}/datasets/v4_{classes}_coco"   # detecciones sobre las fotos originales (píxeles originales, como el resto de familias)
     for split, folder in (("val", "valid"), ("test", "test")):
         paths = sorted(p for p in Path(f"{ds_full}/{folder}").iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"})
         dets = []
@@ -155,11 +156,11 @@ def train(variant: str, seed: int, res: int = 640, noflip: bool = False) -> dict
                     dets.append({"image_id": i, "category_id": int(l), "bbox": [x1, y1, x2 - x1, y2 - y1], "score": float(s)})
         json.dump(dets, open(out / f"dt_{split}.json", "w"))
         print(f"{split}: {len(paths)} imgs, {len(dets)} dets")
-    meta = {"run_name": run_name, "family": "dfine", "variant": variant, "resolution": res, "seed": seed, "commit": commit,
+    meta = {"run_name": run_name, "family": "dfine", "variant": variant, "resolution": res, "seed": seed, "commit": commit, "classes": classes, "num_classes_cfg": ncls,
             "torch": torch.__version__, "gpu": gpu_name, "train_seconds": round(train_s, 1), "best_checkpoint": best.name,
             "pretrain": WEIGHTS[variant], "params_M": round(sum(p.numel() for p in cfg.model.parameters()) / 1e6, 3),
             "split_sha256": hashlib.sha256(open("/root/split.csv", "rb").read()).hexdigest(), "horizontal_flip": not noflip,
-            "recipe": f"configs/dfine/custom/dfine_hgnetv2_{variant}_custom.yml (oficial) con total_batch_size 16, epochs 80 (policy 72), datos a {DATA_BY_RES[res]}, entrada {res}, -t coco, --use-amp"}
+            "recipe": f"configs/dfine/custom/dfine_hgnetv2_{variant}_custom.yml (oficial) con total_batch_size 16, epochs 80 (policy 72), datos a {DATA_BY_RES[res].format(c=classes)}, entrada {res}, -t coco, --use-amp"}
     json.dump(meta, open(out / "run_meta.json", "w"), indent=2)
     volume.commit()
     print(json.dumps(meta, indent=2))
@@ -242,10 +243,10 @@ def latency(run_names: list[str]) -> dict:
 
 
 @app.local_entrypoint()
-def main(models: str = "s", seeds: str = "42", latency_runs: str = "", res: int = 640, noflip: bool = False):
+def main(models: str = "s", seeds: str = "42", latency_runs: str = "", res: int = 640, noflip: bool = False, classes: str = "c1"):
     if latency_runs:
         latency.remote([r.strip() for r in latency_runs.split(",") if r.strip()]); return
-    jobs = [(m.strip(), int(s), res, noflip) for m in models.split(",") for s in seeds.split(",")]
-    print(f"lanzando {len(jobs)}: {[f'dfine_{j[0]}_{res}_s{j[1]}' + ('_noflip' if noflip else '') for j in jobs]}")
+    jobs = [(m.strip(), int(s), res, noflip, classes) for m in models.split(",") for s in seeds.split(",")]
+    print(f"lanzando {len(jobs)}: {[f'dfine_{j[0]}_{res}_s{j[1]}' + ('_noflip' if noflip else '') + (f'_{classes}' if classes != 'c1' else '') for j in jobs]}")
     for meta in train.starmap(jobs):
         print(f"done {meta['run_name']}: {meta['train_seconds']:.0f}s")
