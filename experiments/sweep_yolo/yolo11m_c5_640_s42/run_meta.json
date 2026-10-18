@@ -7,7 +7,10 @@
   "ultralytics": "8.4.160",
   "torch": "2.14.0+cu130",
   "gpu": "NVIDIA A100-SXM4-40GB",
-  "train_seconds": 307.4,
+  "train_seconds": 325.6,
+  "fixed_epochs": false,
+  "fliplr": 0.0,
+  "patience": 15,
   "recipe_sha256": "b4e279f4eb22c6f254681dc9c4f0a46308dce71db4b35604210d62b786fb5453",
   "split_sha256": "8fd1af326653a7eadd08743b3c630a54420c53b088c9a8d819668965771695a3",
   "params_M": 20.057,
@@ -49,10 +52,10 @@
         }
       },
       "speed_ms": {
-        "preprocess": 0.6554359388890892,
-        "inference": 3.3837116666663607,
-        "loss": 0.0006734055552391914,
-        "postprocess": 0.8018679222219464
+        "preprocess": 0.4543317499998996,
+        "inference": 2.950252761110366,
+        "loss": 0.0005744055556533567,
+        "postprocess": 0.8255485277771868
       }
     },
     "test": {
@@ -92,10 +95,10 @@
         }
       },
       "speed_ms": {
-        "preprocess": 0.3989654413400313,
-        "inference": 2.7830037374299756,
-        "loss": 0.0006184636877710113,
-        "postprocess": 0.776014675978829
+        "preprocess": 0.3020717932964397,
+        "inference": 2.567718335195593,
+        "loss": 0.0005973798882950071,
+        "postprocess": 0.8644393687153898
       }
     }
   }
