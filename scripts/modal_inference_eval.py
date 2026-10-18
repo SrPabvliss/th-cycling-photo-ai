@@ -65,6 +65,7 @@ import json as _json
 DEFAULT_EVAL_DETECTORS = _json.dumps({
     "yolo26m_1024": {"kind": "yolo", "weights": "/vol/weights/yolo26m_c1_1024_s42_fx/best.pt", "imgsz": 1024},
     "yolo11m_640_fx": {"kind": "yolo", "weights": "/vol/weights/yolo11m_c1_640_s42_fx/best.pt", "imgsz": 640},
+    "yolo11m_1024_fx": {"kind": "yolo", "weights": "/vol/weights/yolo11m_c1_1024_s42_fx/best.pt", "imgsz": 1024},
     "rfdetr_l_896": {"kind": "rfdetr", "weights": "/vol/weights/rfdetr_large_896_s42_fx/checkpoint_best_ema.pth",
                      "variant": "large", "resolution": 896, "classes": ["competidor_number"]},
     "dfine_l_640": {"kind": "dfine", "weights": "/vol/weights/dfine_l_640_s42/best_stg2.pth",
@@ -77,6 +78,7 @@ DEFAULT_EVAL_DETECTORS = _json.dumps({
 })
 DEFAULT_EVAL_READERS = _json.dumps({
     "svtrv2_b": {"kind": "svtrv2", "weights": "/vol/weights/svtrv2_base_syn2_s42"},
+    "svtrv2_s": {"kind": "svtrv2", "weights": "/vol/weights/svtrv2_small_syn2_s42"},
     "parseq_v2": {"kind": "parseq", "weights": "/vol/weights/parseq_base_syn2_s42"},
 })
 
