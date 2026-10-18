@@ -150,6 +150,10 @@ image = (
             "COLOR_STRATEGY_TYPE": "none",
             "OCR_DEVICE": "cuda",
             "OCR_PREPROCESS": OCR_PREPROCESS,
+            # Service preprocessing (P-112): JPEG decoded at 1/scale and the
+            # detectors fed the orchestrator's array. Defaults = historical path.
+            "DECODE_SCALE": os.environ.get("EVAL_DECODE_SCALE", "1"),
+            "DETECT_INPUT": os.environ.get("EVAL_DETECT_INPUT", "pil"),
             "WARMUP_INFERENCE": "1",
             "WARMUP_ALL": "1" if TIMING else "0",
             "EVAL_IMAGE_CACHE": "4" if TIMING else "0",

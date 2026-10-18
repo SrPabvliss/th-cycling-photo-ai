@@ -22,6 +22,7 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageOps
 
 from cycling_photo_ai.detection.inference.ports import Detection
@@ -80,6 +81,27 @@ class DfineDetector:
 
         w, h = image.size
         x = self._tf(image).unsqueeze(0).to(self._device)
+        return self._infer(x, w, h, conf)
+
+    def detect_array(self, image: "np.ndarray", conf: float | None = None) -> list[Detection]:
+        """Detect on a decoded BGR uint8 array (H, W, 3): uploaded as uint8 and
+        resized on the GPU (bilinear, antialiased) instead of PIL's resize of
+        the full photo on the CPU (P-112). Resampling differs slightly from
+        `detect_image`, so parity with the selection study holds only there."""
+        if self._model is None:
+            self._load()
+        import torch
+        from torchvision.transforms import functional as TF
+
+        h, w = image.shape[:2]
+        t = torch.from_numpy(np.ascontiguousarray(image)).to(self._device, non_blocking=True)
+        t = t[..., [2, 1, 0]].permute(2, 0, 1).float().div_(255.0)
+        x = TF.resize(t, [self._res, self._res], antialias=True).unsqueeze(0)
+        return self._infer(x, w, h, conf)
+
+    def _infer(self, x, w: int, h: int, conf: float | None) -> list[Detection]:
+        import torch
+
         sz = torch.tensor([[w, h]]).to(self._device)
         sync = torch.cuda.synchronize if self._device == "cuda" or str(self._device).startswith("cuda") else (lambda: None)
         import time

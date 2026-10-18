@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
 from PIL import Image, ImageOps
 
 from cycling_photo_ai.detection.inference.ports import Detection
@@ -159,6 +160,25 @@ class RfdetrDetector:
 
         # predict() returns sv.Detections with xyxy (pixel), confidence, class_id
         sv_dets = self._model.predict(image, threshold=0.0)
+        return self._to_detections(sv_dets, img_w, img_h)
+
+    def detect_array(self, image: "np.ndarray", conf: float | None = None) -> list[Detection]:
+        """Detect on a decoded BGR uint8 array (H, W, 3). The pixels go to the
+        GPU as uint8 and are converted there; rfdetr's predict() otherwise
+        converts the full photo to float on the CPU and uploads it (P-112).
+        Normalization and the resize to the network input stay rfdetr's own."""
+        if self._model is None:
+            self._load()
+        import torch
+
+        img_h, img_w = image.shape[:2]
+        device = self._model.model.device
+        t = torch.from_numpy(np.ascontiguousarray(image)).to(device, non_blocking=True)
+        t = t[..., [2, 1, 0]].permute(2, 0, 1).float().div_(255.0)  # BGR uint8 -> RGB float [0, 1]
+        sv_dets = self._model.predict(t, threshold=0.0)
+        return self._to_detections(sv_dets, img_w, img_h)
+
+    def _to_detections(self, sv_dets, img_w: int, img_h: int) -> list[Detection]:
         detections: list[Detection] = []
 
         for i in range(len(sv_dets)):

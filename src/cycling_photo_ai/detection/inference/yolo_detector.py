@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
 from PIL import Image, ImageOps
 
 from cycling_photo_ai.detection.inference.ports import Detection
@@ -86,6 +87,17 @@ class YoloDetector:
         if self._model is None:
             self._load()
 
+        return self._run(img, conf)
+
+    def detect_array(self, image: "np.ndarray", conf: float | None = None) -> list[Detection]:
+        """Detect on a decoded BGR uint8 array (H, W, 3), the layout ultralytics
+        uses internally: the library letterboxes it directly, with none of the
+        full-size conversions it applies to a PIL image (P-112)."""
+        if self._model is None:
+            self._load()
+        return self._run(image, conf)
+
+    def _run(self, img, conf: float | None) -> list[Detection]:
         if conf is None:
             results = self._model(img, imgsz=self._imgsz, verbose=False)
         else:
@@ -102,7 +114,6 @@ class YoloDetector:
         for result in results:
             if result.boxes is None:
                 continue
-            img_w, img_h = img.size
             for box in result.boxes:
                 cls_id = int(box.cls[0])
                 # Class names come from the checkpoint (ultralytics stores them):

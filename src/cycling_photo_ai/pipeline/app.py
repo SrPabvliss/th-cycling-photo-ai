@@ -424,6 +424,8 @@ async def pipeline(
             "max_bibs": max_bibs,
             "bib_padding": bib_padding if bib_padding is not None else orch._padding_ratio,
             "ocr_preprocess": orch.ocr_preprocess_mode,
+            "decode_scale": orch.decode_scale,
+            "detect_input": orch.detect_input,
         },
     )
 
@@ -593,6 +595,8 @@ async def meta() -> dict[str, Any]:
             "ocr": DEFAULT_OCR,
             "color": DEFAULT_COLOR,
             "ocr_preprocess": os.environ.get("OCR_PREPROCESS", "legacy"),
+            "decode_scale": os.environ.get("DECODE_SCALE", "1"),
+            "detect_input": os.environ.get("DETECT_INPUT", "pil"),
             "ocr_confidence_threshold": os.environ.get("OCR_CONFIDENCE_THRESHOLD", "0.70"),
             "ocr_device": os.environ.get("OCR_DEVICE"),
         },

@@ -134,7 +134,7 @@ def fake_image():
 def patched_image(fake_image, monkeypatch):
     monkeypatch.setattr(
         "cycling_photo_ai.pipeline.orchestrator._load_image",
-        lambda _: (Image.fromarray(fake_image[:, :, ::-1].copy()), fake_image),
+        lambda _path, _scale=1: (Image.fromarray(fake_image[:, :, ::-1].copy()), fake_image),
     )
     return fake_image
 

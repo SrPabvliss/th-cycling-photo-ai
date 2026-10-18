@@ -63,7 +63,7 @@ def flat_image(monkeypatch) -> np.ndarray:
     bgr = np.full((200, 200, 3), 128, dtype=np.uint8)
     monkeypatch.setattr(
         "cycling_photo_ai.pipeline.orchestrator._load_image",
-        lambda _: (Image.fromarray(bgr[:, :, ::-1].copy()), bgr),
+        lambda _path, _scale=1: (Image.fromarray(bgr[:, :, ::-1].copy()), bgr),
     )
     return bgr
 

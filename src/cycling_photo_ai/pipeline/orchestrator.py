@@ -108,11 +108,29 @@ def _save_crop(crop: np.ndarray, crop_dir: str, stem: str, idx: int) -> str | No
         return None
 
 
-def _load_image(image_path: str) -> tuple[Image.Image, np.ndarray]:
+# Service preprocessing (P-112). Defaults keep the historical path.
+#   DECODE_SCALE  1 (default), 2 or 4: JPEG decoded at 1/scale by the codec
+#                 (`Image.draft`, DCT scaling in libjpeg-turbo). Detector and
+#                 crops both use the reduced pixels; bbox stay normalized.
+#   DETECT_INPUT  "pil" (default): the detector gets the PIL image and its
+#                 library converts it; "array": detectors that implement
+#                 `detect_array` get the BGR array the orchestrator already
+#                 holds, which skips the library's full-size copies.
+DECODE_SCALES = (1, 2, 4)
+DETECT_INPUTS = ("pil", "array")
+
+
+def _load_image(image_path: str, scale: int = 1) -> tuple[Image.Image, np.ndarray]:
     """Decode once. Returns the EXIF-corrected RGB image for the detector and
-    the same pixels as a BGR array for cropping."""
-    pil_image = ImageOps.exif_transpose(Image.open(image_path)).convert("RGB")
-    return pil_image, np.ascontiguousarray(np.asarray(pil_image)[:, :, ::-1])
+    the same pixels as a BGR array for cropping. `scale` > 1 asks the JPEG
+    decoder for a 1/scale image (other formats are decoded in full)."""
+    img = Image.open(image_path)
+    if scale > 1:
+        img.draft("RGB", (max(1, img.width // scale), max(1, img.height // scale)))
+    pil_image = ImageOps.exif_transpose(img).convert("RGB")
+    # cv2 swaps channels in one pass; the numpy view + contiguous copy costs
+    # several times more on an 18 Mpx photo.
+    return pil_image, cv2.cvtColor(np.asarray(pil_image), cv2.COLOR_RGB2BGR)
 
 
 def _crop_with_padding(
@@ -151,12 +169,21 @@ class PipelineOrchestrator:
         bib_padding_ratio: float = 0.12,
         confidence_threshold: float = 0.25,
         ocr_preprocess: str | None = None,
+        decode_scale: int | None = None,
+        detect_input: str | None = None,
     ) -> None:
         self._detector = detector
         self._bib_reader = bib_reader
         self._color_strategy = color_strategy
         self._padding_ratio = bib_padding_ratio
         self._confidence_threshold = confidence_threshold
+
+        self.decode_scale = int(decode_scale or os.environ.get("DECODE_SCALE", "1"))
+        if self.decode_scale not in DECODE_SCALES:
+            raise ValueError(f"DECODE_SCALE={self.decode_scale!r}. Expected one of {DECODE_SCALES}")
+        self.detect_input = detect_input or os.environ.get("DETECT_INPUT", "pil")
+        if self.detect_input not in DETECT_INPUTS:
+            raise ValueError(f"DETECT_INPUT={self.detect_input!r}. Expected one of {DETECT_INPUTS}")
 
         # Crop preprocessing (CLAHE / denoise gates, ADR-010) lives here so every
         # reader gets the same crop. "legacy" keeps each reader's historical
@@ -220,14 +247,16 @@ class PipelineOrchestrator:
         pil_image: Image.Image | None = None
         image: np.ndarray | None = None
         try:
-            pil_image, image = _load_image(image_path)
+            pil_image, image = _load_image(image_path, self.decode_scale)
         except Exception as e:
             errors.append(f"Failed to read image: {image_path}: {e}")
         decode_ms = (time.perf_counter() - decode_start) * 1000
 
         # Step 1 — Detection
         det_start = time.perf_counter()
-        if pil_image is not None and hasattr(self._detector, "detect_image"):
+        if image is not None and self.detect_input == "array" and hasattr(self._detector, "detect_array"):
+            raw_detections = self._detector.detect_array(image, conf=det_threshold)
+        elif pil_image is not None and hasattr(self._detector, "detect_image"):
             raw_detections = self._detector.detect_image(pil_image, conf=det_threshold)
         else:
             raw_detections = self._detector.detect(image_path)
