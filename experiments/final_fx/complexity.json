@@ -1,0 +1,96 @@
+{
+  "torch": "2.14.0+cu130",
+  "device": "cuda",
+  "convention": "torch.utils.flop_counter (2 FLOPs per multiply-accumulate; matmul/conv/attention only)",
+  "detectors": {
+    "yolo11m_c5_640_prod": {
+      "kind": "yolo",
+      "resolution": 640,
+      "params_M": 20.034,
+      "gflops_net_square": 67.78,
+      "gflops_service_12mpx": 50.81,
+      "gflops_ultralytics_thop": 67.66
+    },
+    "yolo11m_c1_1024_fx": {
+      "kind": "yolo",
+      "resolution": 1024,
+      "params_M": 20.031,
+      "gflops_net_square": 173.97,
+      "gflops_service_12mpx": 130.33,
+      "gflops_ultralytics_thop": 173.16
+    },
+    "yolo26m_c1_1024_fx": {
+      "kind": "yolo",
+      "resolution": 1024,
+      "params_M": 21.746,
+      "gflops_net_square": 175.28,
+      "gflops_service_12mpx": 131.16,
+      "gflops_ultralytics_thop": 173.67
+    },
+    "rfdetr_l_896_fx": {
+      "kind": "rfdetr",
+      "resolution": 896,
+      "params_M": 34.074,
+      "gflops_net_square": 230.05,
+      "gflops_service_12mpx": 230.05
+    },
+    "dfine_l_640": {
+      "kind": "dfine",
+      "resolution": 640,
+      "params_M": 30.664,
+      "gflops_net_square": 91.26,
+      "gflops_service_12mpx": 91.26
+    },
+    "yolo26m_c5_1024_fx": {
+      "kind": "yolo",
+      "resolution": 1024,
+      "params_M": 21.753,
+      "gflops_net_square": 175.33,
+      "gflops_service_12mpx": 131.19,
+      "gflops_ultralytics_thop": 173.72
+    },
+    "rfdetr_l_896_fx_c5": {
+      "kind": "rfdetr",
+      "resolution": 896,
+      "params_M": 34.088,
+      "gflops_net_square": 230.06,
+      "gflops_service_12mpx": 230.06
+    }
+  },
+  "readers": {
+    "parseq_4phase_prod": {
+      "kind": "parseq",
+      "params_M": 23.76,
+      "gflops_service_crop_40x160": 5.939,
+      "gflops_net_32x128": 5.939
+    },
+    "parseq_base_syn2": {
+      "kind": "parseq",
+      "params_M": 23.76,
+      "gflops_service_crop_40x160": 5.939,
+      "gflops_net_32x128": 5.939
+    },
+    "svtrv2_base_syn2": {
+      "kind": "svtrv2",
+      "params_M": 19.723,
+      "gflops_service_crop_40x160": 7.019,
+      "gflops_net_by_msr_size": {
+        "64x64": 7.016,
+        "96x48": 7.953,
+        "112x40": 7.719,
+        "128x32": 7.019
+      }
+    },
+    "svtrv2_small_syn2": {
+      "kind": "svtrv2",
+      "params_M": 11.219,
+      "gflops_service_crop_40x160": 3.9,
+      "gflops_net_by_msr_size": {
+        "64x64": 3.897,
+        "96x48": 4.417,
+        "112x40": 4.288,
+        "128x32": 3.9
+      }
+    }
+  }
+}

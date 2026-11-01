@@ -1,0 +1,33 @@
+GPU NVIDIA L4, 50 fotos de latencia × 3, muestra 330 fotos, lector svtrv2_b
+Mpx: p5 0.8  p50 10.8  p95 17.9
+
+== Decodificación (ms, mediana / p95, todas las fotos y repeticiones)
+  full       198.8 /   463.4
+  nocopy     115.9 /   326.8
+  draft2      70.2 /   195.0
+  draft4      38.2 /   133.9
+
+== Por ruta: tiempo por foto (mediana) y acuerdo/exactitud
+  ruta                              decode     det    red   lect   TOTAL     p95 |  n=ref  IoU50 IoUmin | lect=ref  exact    ref    n
+  full/yolo26m_1024/pil              198.8   138.1   13.8   15.0   373.1   746.1 | 100.0%  1.000  1.000 |   100.0%  69.7%  69.7%  330
+  full/yolo26m_1024/np               198.8    20.5   13.8   14.7   229.3   494.0 | 100.0%  1.000  1.000 |   100.0%  69.7%  69.7%  330
+  full/rfdetr_l_896/pil              198.8    60.6   27.9   15.2   296.7   611.5 | 100.0%  1.000  1.000 |   100.0%  80.0%  80.0%  330
+  full/rfdetr_l_896/pre              198.8    87.5   27.9   15.2   304.5   590.0 |  97.9%  0.966  0.000 |    91.8%  80.9%  80.0%  330
+  full/dfine_l_640/pil               198.8   104.3   43.9   15.1   322.2   615.1 | 100.0%  1.000  1.000 |   100.0%  80.9%  80.9%  330
+  full/dfine_l_640/pre               198.8    87.5   43.7   15.1   303.1   582.2 |  99.5%  0.997  0.000 |    97.6%  80.9%  80.9%  330
+  draft2/yolo26m_1024/pil             70.2    46.8   13.6   14.5   125.2   273.4 |  97.4%  0.978  0.000 |    93.4%  71.2%  69.7%  330
+  draft2/yolo26m_1024/np              70.2    19.9   13.6   14.4   100.1   229.1 |  97.4%  0.978  0.000 |    93.4%  71.2%  69.7%  330
+  draft2/rfdetr_l_896/pil             70.2    38.1   27.7   14.7   119.9   251.4 |  98.4%  0.975  0.000 |    91.1%  80.6%  80.0%  330
+  draft2/rfdetr_l_896/pre             70.2    57.6   27.9   14.7   141.1   279.4 |  97.1%  0.962  0.000 |    88.2%  79.7%  80.0%  330
+  draft2/dfine_l_640/pil              70.2    67.9   43.7   14.6   149.9   286.0 |  98.7%  0.995  0.000 |    94.7%  82.4%  80.9%  330
+  draft2/dfine_l_640/pre              70.2    67.8   43.6   14.5   149.7   280.1 |  98.7%  0.994  0.000 |    94.7%  82.4%  80.9%  330
+  draft4/yolo26m_1024/pil             38.2    26.7   13.5   14.3    77.1   180.3 |  90.5%  0.948  0.000 |    85.8%  69.1%  69.7%  330
+  draft4/yolo26m_1024/np              38.2    19.2   13.5   14.1    70.8   167.6 |  90.5%  0.948  0.000 |    85.8%  69.1%  69.7%  330
+  draft4/rfdetr_l_896/pil             38.2    33.0   27.7   14.4    84.7   183.0 |  96.6%  0.952  0.000 |    87.9%  80.3%  80.0%  330
+  draft4/rfdetr_l_896/pre             38.2    46.2   27.8   14.4    97.3   198.0 |  95.8%  0.952  0.000 |    87.6%  80.0%  80.0%  330
+  draft4/dfine_l_640/pil              38.2    56.6   43.5   14.4   108.4   210.6 |  97.9%  0.982  0.000 |    90.5%  79.4%  80.9%  330
+  draft4/dfine_l_640/pre              38.2    56.1   43.4   14.4   107.9   208.8 |  97.9%  0.982  0.000 |    90.5%  79.4%  80.9%  330
+
+  decode/det/red/lect: decodificación, etapa de detección, red sola, lectura (todos los recortes). TOTAL = decode + det + lect.
+  n=ref: fotos con el mismo número de cajas sobre el umbral que full/<detector>/pil; IoU: mejor IoU de cada caja de referencia.
+  lect=ref: fotos cuyo conjunto de dígitos leídos coincide con la ruta de referencia; exact: coincide con la referencia humana (solo muestra); ref: idem para full/pil.
