@@ -6,10 +6,13 @@ Domains don't know about each other; this layer connects them.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 # Parallel workers for per-crop Gemini color analysis. Bounded above by the
@@ -29,6 +32,21 @@ COLOR_REGIONS = ("helmet", "cyclist_clothes", "bicycle")
 COLOR_PADDING_RATIO = 0.08
 CROP_UPLOAD_TIMEOUT_S = 30
 CROP_UPLOAD_JPEG_QUALITY = 85
+
+StageObserver = Callable[[str, datetime, datetime], None]
+
+logger = logging.getLogger(__name__)
+
+
+def _notify_stage(
+    observer: StageObserver | None, stage: str, started_at: datetime
+) -> None:
+    if observer is None:
+        return
+    try:
+        observer(stage, started_at, datetime.now(UTC))
+    except Exception:
+        logger.exception("stage observer failed for %s", stage)
 
 
 def _upload_crop(crop: np.ndarray, url: str | None) -> tuple[str | None, str | None]:
@@ -131,6 +149,7 @@ class PipelineOrchestrator:
         self,
         image_path: str,
         crop_upload_urls: CropUploadUrls | None = None,
+        stage_observer: StageObserver | None = None,
     ) -> PipelineResult:
         """Run full pipeline on one image.
 
@@ -150,9 +169,11 @@ class PipelineOrchestrator:
         stage_results: list[dict] = []
 
         # Step 1 — Detection
+        det_wall_start = datetime.now(UTC)
         det_start = time.perf_counter()
         raw_detections = self._detector.detect(image_path)
         detection_ms = (time.perf_counter() - det_start) * 1000
+        _notify_stage(stage_observer, "detection", det_wall_start)
         detections = [
             d for d in raw_detections
             if d.confidence >= self._confidence_threshold
@@ -227,6 +248,7 @@ class PipelineOrchestrator:
             bib_url_list = (
                 crop_upload_urls.bibs if crop_upload_urls is not None else []
             )
+            ocr_wall_start = datetime.now(UTC)
             if self._bib_reader is not None:
                 for idx, det in enumerate(ocr_targets):
                     ocr_processed += 1
@@ -270,6 +292,9 @@ class PipelineOrchestrator:
                     ocr_succeeded += 1
                     if reading.status == "abstained":
                         ocr_abstained += 1
+
+            if self._bib_reader is not None and ocr_processed > 0:
+                _notify_stage(stage_observer, "ocr", ocr_wall_start)
 
             # Finalize OCR stage result
             if self._bib_reader is None:
@@ -321,6 +346,7 @@ class PipelineOrchestrator:
                 if crop_upload_urls is not None
                 else {region: [] for region in COLOR_REGIONS}
             )
+            color_wall_start = datetime.now(UTC)
             if self._color_strategy is not None:
                 # Pre-assign region indices sequentially to preserve crop URL mapping.
                 indexed_targets: list[tuple[int, object, int]] = []
@@ -394,6 +420,9 @@ class PipelineOrchestrator:
                         "crop_path": color_crop_path,
                     })
                     color_succeeded += 1
+
+            if self._color_strategy is not None and color_processed > 0:
+                _notify_stage(stage_observer, "color", color_wall_start)
 
             # Finalize color stage result
             if self._color_strategy is None:
