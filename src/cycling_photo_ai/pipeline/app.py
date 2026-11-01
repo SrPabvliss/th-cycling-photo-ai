@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import tempfile
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,8 @@ from cycling_photo_ai.pipeline.schemas import (
     StageResult,
     StageTimings,
 )
+from cycling_photo_ai.telemetry.asgi_middleware import AttributionMiddleware, current_call_id
+from cycling_photo_ai.telemetry.recorder import recorder_from_env
 
 # Caches: detectors / readers / color strategies keyed by type → instance (lazy)
 _detectors: dict[str, IDetector] = {}
@@ -55,6 +58,18 @@ AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy")
 AVAILABLE_OCRS = ("parseq", "trocr")
 AVAILABLE_COLORS = ("gemini", "none")
 
+telemetry_recorder = recorder_from_env()
+
+
+def _process_started_at() -> datetime:
+    import psutil
+
+    return datetime.fromtimestamp(psutil.Process().create_time(), UTC)
+
+
+def _record_stage(stage: str, started_at: datetime, ended_at: datetime) -> None:
+    telemetry_recorder.record_stage(stage, current_call_id.get(), started_at, ended_at)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -65,6 +80,8 @@ async def lifespan(app: FastAPI):
     once at boot; failures crash the container so Swarm health-checks
     catch broken images instead of silently serving 0-result responses.
     """
+    boot_started_at = _process_started_at()
+    telemetry_recorder.start()
     print("[lifespan] Warming up default models...", flush=True)
 
     detector = _get_detector(DEFAULT_DETECTOR)
@@ -83,6 +100,7 @@ async def lifespan(app: FastAPI):
     print(f"[lifespan] Color ready: {DEFAULT_COLOR}", flush=True)
 
     print("[lifespan] All models warm.", flush=True)
+    telemetry_recorder.record_boot(boot_started_at, datetime.now(UTC))
 
     yield
 
@@ -90,6 +108,7 @@ async def lifespan(app: FastAPI):
     _bib_readers.clear()
     _color_strategies.clear()
     _orchestrators.clear()
+    telemetry_recorder.stop()
 
 
 app = FastAPI(
@@ -97,6 +116,7 @@ app = FastAPI(
     version="0.4.0",
     lifespan=lifespan,
 )
+app.add_middleware(AttributionMiddleware, recorder=telemetry_recorder)
 
 
 def _get_detector(detector_type: str = DEFAULT_DETECTOR) -> IDetector:
@@ -215,6 +235,7 @@ async def pipeline(
         result = orch.process(
             image_path=image_path,
             crop_upload_urls=request.crop_upload_urls,
+            stage_observer=_record_stage,
         )
     finally:
         if image_path != request.image_url:

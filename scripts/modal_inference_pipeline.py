@@ -35,11 +35,30 @@ Switch backend a Modal:
 Rollback inmediato:
   AI_PIPELINE_BASE_URL=http://localhost:8089 → restart backend
   modal app rollback cycling-photo-ai-inference  (si necesitas revertir deploy)
+
+Telemetría de atribución a yupana (TIT-70):
+  Apagada por defecto. Se enciende solo si el contenedor tiene YUPANA_BASE_URL y
+  YUPANA_API_KEY, que vienen de un Secret de Modal adjuntado con
+  YUPANA_TELEMETRY_SECRET. MODAL_APP_NAME separa la app (y su facturación) de la
+  desplegada. Prueba local sin tocar la app que usa el backend:
+    MODAL_APP_NAME=cycling-photo-ai-inference-tit70 \\
+    YUPANA_TELEMETRY_SECRET=yupana-telemetry-dev \\
+    modal serve scripts/modal_inference_pipeline.py
 """
 
 from __future__ import annotations
 
+import os
+
 import modal
+
+# Variables de la prueba local: se hornean en la imagen para que el contenedor, que
+# re-importa este script, defina los mismos objetos de Modal que el proceso local.
+_deployment_env = {
+    name: value
+    for name in ("MODAL_APP_NAME", "YUPANA_TELEMETRY_SECRET")
+    if (value := os.environ.get(name))
+}
 
 # Pinned versions per deep research findings (Ultralytics reinstala torch agresivo si no se pinea)
 image = (
@@ -87,13 +106,17 @@ image = (
             "PARSEQ_WEIGHTS": "/vol/weights/parseq_4phase",
             # Threshold defaults
             "OCR_CONFIDENCE_THRESHOLD": "0.70",
+            **_deployment_env,
         }
     )
     # Bundle el paquete (src/cycling_photo_ai) en la imagen — debe ir al final
     .add_local_python_source("cycling_photo_ai")
 )
 
-app = modal.App("cycling-photo-ai-inference", image=image)
+app = modal.App(os.environ.get("MODAL_APP_NAME", "cycling-photo-ai-inference"), image=image)
+
+_telemetry_secret = os.environ.get("YUPANA_TELEMETRY_SECRET")
+telemetry_secrets = [modal.Secret.from_name(_telemetry_secret)] if _telemetry_secret else []
 
 # Volumen creado previamente para training. Mismo volume reusado para inferencia.
 volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=False)
@@ -105,6 +128,7 @@ volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=False)
     scaledown_window=300,
     max_containers=10,
     timeout=120,
+    secrets=telemetry_secrets,
     # min_containers=0  (default — scale-to-zero, evita facturar GPU 24/7)
 )
 @modal.concurrent(max_inputs=4, target_inputs=2)
