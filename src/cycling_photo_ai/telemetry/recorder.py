@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from cycling_photo_ai.telemetry.attribution_report import build_attribution_report
+from cycling_photo_ai.telemetry.gpu_meter import detect_gpu_meter
 from cycling_photo_ai.telemetry.report_buffer import ReportBuffer
 from cycling_photo_ai.telemetry.yupana_sender import YupanaSender
 
@@ -33,6 +34,7 @@ class TelemetryRecorder:
         self,
         sink: IReportSink,
         container_id: str,
+        meter: str,
         buffer: ReportBuffer | None = None,
         clock: Callable[[], datetime] = utc_now,
         heartbeat_s: float = 30,
@@ -41,6 +43,7 @@ class TelemetryRecorder:
     ) -> None:
         self._sink = sink
         self._container_id = container_id
+        self._meter = meter
         self._buffer = buffer or ReportBuffer()
         self._clock = clock
         self._heartbeat_s = heartbeat_s
@@ -80,7 +83,13 @@ class TelemetryRecorder:
     def record_boot(self, started_at: datetime, ended_at: datetime) -> None:
         self._enqueue(
             build_attribution_report(
-                "stage", self._container_id, started_at, ended_at, [], stage_name="boot"
+                "stage",
+                self._container_id,
+                started_at,
+                ended_at,
+                [],
+                meter=self._meter,
+                stage_name="boot",
             ),
             protected=True,
         )
@@ -99,7 +108,12 @@ class TelemetryRecorder:
         started_at, call_id = entry
         self._enqueue(
             build_attribution_report(
-                "request", self._container_id, started_at, self._clock(), _served(call_id)
+                "request",
+                self._container_id,
+                started_at,
+                self._clock(),
+                _served(call_id),
+                meter=self._meter,
             )
         )
 
@@ -117,6 +131,7 @@ class TelemetryRecorder:
                 started_at,
                 ended_at,
                 _served(call_id),
+                meter=self._meter,
                 stage_name=stage_name,
             )
         )
@@ -127,7 +142,11 @@ class TelemetryRecorder:
                 return
             served = [call_id for _, call_id in self._in_flight.values() if call_id]
         now = self._clock()
-        self._enqueue(build_attribution_report("heartbeat", self._container_id, now, now, served))
+        self._enqueue(
+            build_attribution_report(
+                "heartbeat", self._container_id, now, now, served, meter=self._meter
+            )
+        )
 
     def flush_tick(self) -> None:
         if not self._flush_lock.acquire(blocking=False):
@@ -209,13 +228,18 @@ class NullTelemetryRecorder:
         return None
 
 
-def recorder_from_env(environ: Mapping[str, str] = os.environ) -> ITelemetryRecorder:
+def recorder_from_env(
+    environ: Mapping[str, str] = os.environ,
+    meter_resolver: Callable[[], tuple[str, str | None]] = detect_gpu_meter,
+) -> ITelemetryRecorder:
     base_url = environ.get("YUPANA_BASE_URL")
     api_key = environ.get("YUPANA_API_KEY")
     container_id = environ.get("MODAL_TASK_ID")
     if not (base_url and api_key and container_id):
         return NullTelemetryRecorder()
-    return TelemetryRecorder(YupanaSender(base_url, api_key), container_id)
+    meter, device_name = meter_resolver()
+    logger.info("telemetry meter %s for device %s", meter, device_name)
+    return TelemetryRecorder(YupanaSender(base_url, api_key), container_id, meter)
 
 
 def _served(call_id: str | None) -> list[str]:

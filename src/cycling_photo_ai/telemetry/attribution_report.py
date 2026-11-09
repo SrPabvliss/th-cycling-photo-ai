@@ -13,7 +13,6 @@ AttributionActivity = Literal["request", "heartbeat", "stage"]
 
 SCHEMA_VERSION = 3
 PROVIDER = "modal"
-METER = "gpu.container_seconds"
 
 
 def format_instant(instant: datetime) -> str:
@@ -29,6 +28,8 @@ def build_attribution_report(
     started_at: datetime,
     ended_at: datetime,
     served: Sequence[str],
+    *,
+    meter: str,
     stage_name: str | None = None,
 ) -> dict[str, Any]:
     started = format_instant(started_at)
@@ -42,7 +43,7 @@ def build_attribution_report(
         "kind": "attribution",
         "measurement_status": "complete",
         "payload": {
-            "meter": METER,
+            "meter": meter,
             "activity": activity,
             "container_id": container_id,
             "started_at": started,
