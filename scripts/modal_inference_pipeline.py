@@ -1,40 +1,45 @@
-"""TIT-8 spike: Modal GPU inference endpoint para cycling-photo pipeline.
+"""Modal GPU inference endpoint para cycling-photo pipeline (producción).
 
 Reusa el FastAPI `app` existente (cycling_photo_ai.pipeline.app:app) via @modal.asgi_app
 para garantizar mismo schema/comportamiento que el pipeline local.
 
-Stack:
-- L4 GPU (24GB VRAM, $0.000222/s = $0.80/h, mejor costo/perf que A10G/T4 para nuestro modelo)
-- Scale-to-zero (sin warm pool — ~$4-6/mes proyectado vs $575/mes con min_containers=1)
-- Concurrent: max 4 inputs por contenedor, target 2 (autoscale al exceder)
+Stack (TIT-101):
+- Detector RF-DETR-L 896 (rfdetr_l_896) + lector SVTRv2-B (svtrv2_b, OpenOCR 1ccfc6e)
+- Librerías con los mismos pins que el evaluador del artículo (scripts/modal_inference_eval.py,
+  11fa314): torch 2.14, rfdetr 1.10.1, transformers>=5.1,<6
+- GPU L4 hoy (una tarea posterior pasa a A10G); cpu=4, memory=8192
+- Scale-to-zero (sin warm pool), concurrent: max 4 inputs por contenedor, target 2
 - scaledown_window=300s (5 min idle antes de apagar)
-- Color stage OFF por env var (TIT-9 ya merged en backend; redundante pero defensivo)
+- Color stage OFF, DECODE_SCALE=2, DETECT_INPUT=array, warm-up al arrancar
 
 Pre-requisitos para deploy:
 1. `modal token new` (auth con cuenta Modal)
-2. Volumen `cycling-photo-ai-vol` debe tener weights bajo:
-   - /weights/yolo11m_v3cleaned/best.pt
-   - /weights/parseq_4phase/best.pt
-   - /weights/parseq_4phase/config.json
-   Subir con:
-     modal volume put cycling-photo-ai-vol weights/yolo11m_v3cleaned /weights/yolo11m_v3cleaned
-     modal volume put cycling-photo-ai-vol weights/parseq_4phase /weights/parseq_4phase
+2. Volumen `cycling-photo-ai-vol` debe tener los pesos bajo:
+   - /weights/rfdetr_large_896_s42_fx/checkpoint_best_ema.pth
+   - /weights/svtrv2_base_syn2_s42/
+   Se copian desde el volumen de evaluación (cuenta del perfil eswa-eval-3) al volumen de
+   producción (perfil pablomartinvillacres):
+     modal profile activate eswa-eval-3
+     modal volume get cycling-photo-ai-eval-vol /weights/rfdetr_large_896_s42_fx ./tmp_weights/rfdetr_large_896_s42_fx
+     modal volume get cycling-photo-ai-eval-vol /weights/svtrv2_base_syn2_s42 ./tmp_weights/svtrv2_base_syn2_s42
+     modal profile activate pablomartinvillacres
+     modal volume put cycling-photo-ai-vol ./tmp_weights/rfdetr_large_896_s42_fx /weights/rfdetr_large_896_s42_fx
+     modal volume put cycling-photo-ai-vol ./tmp_weights/svtrv2_base_syn2_s42 /weights/svtrv2_base_syn2_s42
 
 Deploy:
   modal deploy scripts/modal_inference_pipeline.py
   → devuelve URL https://<account>--cycling-photo-ai-inference-fastapi-app.modal.run
 
-Smoke test (después de deploy):
-  curl -X POST "<URL>/pipeline?detector=yolo&ocr=parseq&color=none" \\
-    -H 'Content-Type: application/json' \\
-    -d '{"image_id":"test-1","image_url":"https://example.com/some.jpg"}'
-
-Switch backend a Modal:
-  AI_PIPELINE_BASE_URL=<URL> en .env.development → restart backend
+Deploy QA (app separada, sin telemetría: no define YUPANA_TELEMETRY_SECRET):
+  MODAL_APP_NAME=cycling-photo-ai-inference-qa modal deploy scripts/modal_inference_pipeline.py
 
 Rollback inmediato:
-  AI_PIPELINE_BASE_URL=http://localhost:8089 → restart backend
-  modal app rollback cycling-photo-ai-inference  (si necesitas revertir deploy)
+  modal app rollback cycling-photo-ai-inference v4
+    (v4 = commit 43726ee, YOLO11m + PARSeq). Si el plan rechaza el rollback, la alternativa
+    es redesplegar desde un worktree de 43726ee:
+      git worktree add ../cpai-43726ee 43726ee
+      cd ../cpai-43726ee && modal deploy scripts/modal_inference_pipeline.py
+    Luego reclasificar las fotos fallidas desde el admin UI.
 
 Telemetría de atribución a yupana (TIT-70):
   Apagada por defecto. Se enciende solo si el contenedor tiene YUPANA_BASE_URL y
@@ -60,52 +65,56 @@ _deployment_env = {
     if (value := os.environ.get(name))
 }
 
-# Pinned versions per deep research findings (Ultralytics reinstala torch agresivo si no se pinea)
+OPENOCR_COMMIT = "1ccfc6e"
+
+# Pins del evaluador del artículo (11fa314): el servicio debe reproducir las librerías
+# que produjeron las tablas de selección.
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("libgl1-mesa-glx", "libglib2.0-0", "git")
+    .apt_install("libgl1-mesa-glx", "libglib2.0-0", "git", "wget")
     .pip_install(
-        "torch==2.5.1",
-        "torchvision==0.20.1",
-        "ultralytics==8.3.0",
-        "timm>=0.9.16",
-        "fastapi[standard]==0.115.4",
-        "uvicorn[standard]>=0.30.0",
-        "httpx>=0.27.0",
-        "pillow>=10.4.0",
-        "numpy>=1.26.0",
-        "opencv-python-headless>=4.10.0",
-        "pydantic>=2.9.0",
-        "pytorch-lightning>=2.0.0",
-        "transformers>=4.40.0,<4.50.0",
-        "sentencepiece>=0.2.1",
-        # PARSeq (baudm/parseq) runtime deps
-        "nltk>=3.7.0",
+        "torch==2.14.0",
+        "torchvision==0.29.0",
+        "ultralytics==8.4.41",
+        "rfdetr==1.10.1",
+        "supervision>=0.27.0",
+        "transformers>=5.1,<6",
+        "timm==1.0.26",
+        "pytorch-lightning==2.6.1",
+        "sentencepiece==0.2.1",
+        "nltk==3.9.4",
         "pyyaml>=6.0.0",
-        # cycling_photo_ai.color imports skimage/sklearn at module level
-        # (incluso si COLOR_STRATEGY_TYPE=none) — necesario para import del paquete.
-        "scikit-image>=0.21.0",
-        "scikit-learn>=1.3.0",
+        "scikit-image==0.26.0",
+        "scikit-learn==1.8.0",
+        "opencv-python-headless==4.10.0.84",
+        "pillow==12.2.0",
+        "numpy",
+        "fastapi[standard]==0.136.0",
+        "pydantic==2.13.3",
+        "httpx==0.28.1",
+        "psutil==7.2.2",
+        "requests==2.33.1",
+        "scipy",
     )
-    # Pre-cachea baudm/parseq repo + weights base para evitar git clone en cold start
     .run_commands(
-        "python -c \"import torch; "
-        "torch.hub.load('baudm/parseq', 'parseq', pretrained=False, trust_repo=True); "
-        "print('PARSeq repo cached in torch hub')\"",
+        f"git clone https://github.com/Topdu/OpenOCR /root/OpenOCR && cd /root/OpenOCR && git checkout {OPENOCR_COMMIT}",
     )
     .env(
         {
-            # Modelo defaults
-            "DETECTOR_TYPE": "yolo",
-            "OCR_TYPE": "parseq",
+            "DETECTOR_TYPE": "rfdetr_l_896",
+            "OCR_TYPE": "svtrv2_b",
             "COLOR_STRATEGY_TYPE": "none",
-            # Device override para PARSeq refactor device-agnostic
+            "DECODE_SCALE": "2",
+            "DETECT_INPUT": "array",
+            "OCR_CONFIDENCE_THRESHOLD": "0.50",
+            "MAX_BIBS": "10",
+            "WARMUP_INFERENCE": "1",
             "OCR_DEVICE": "cuda",
+            "OPENOCR_DIR": "/root/OpenOCR",
+            "TOKENIZERS_PARALLELISM": "false",
             # Weights paths. Volumen tiene subdir `weights/` interno → /vol/weights/...
-            "YOLO_WEIGHTS": "/vol/weights/yolo11m_v3cleaned/best.pt",
-            "PARSEQ_WEIGHTS": "/vol/weights/parseq_4phase",
-            # Threshold defaults
-            "OCR_CONFIDENCE_THRESHOLD": "0.70",
+            "RFDETR_L_896_WEIGHTS": "/vol/weights/rfdetr_large_896_s42_fx/checkpoint_best_ema.pth",
+            "SVTRV2_WEIGHTS": "/vol/weights/svtrv2_base_syn2_s42",
             **_deployment_env,
         }
     )
@@ -124,6 +133,8 @@ volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=False)
 
 @app.function(
     gpu="L4",
+    cpu=4.0,
+    memory=8192,
     volumes={"/vol": volume},
     scaledown_window=300,
     max_containers=10,
