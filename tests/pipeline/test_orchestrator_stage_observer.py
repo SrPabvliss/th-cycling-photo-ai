@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from cycling_photo_ai.color.schema import ColorMetadata, ColorResult
 from cycling_photo_ai.detection.inference.ports import Detection
@@ -15,7 +16,10 @@ from cycling_photo_ai.pipeline.orchestrator import PipelineOrchestrator
 @pytest.fixture
 def patched_image(monkeypatch):
     image = np.full((100, 100, 3), 200, dtype=np.uint8)
-    monkeypatch.setattr("cycling_photo_ai.pipeline.orchestrator.cv2.imread", lambda _: image)
+    monkeypatch.setattr(
+        "cycling_photo_ai.pipeline.orchestrator._load_image",
+        lambda _path, _scale=1: (Image.fromarray(image), image, (100, 100)),
+    )
     return image
 
 
@@ -25,7 +29,7 @@ def _detection(class_name: str) -> Detection:
 
 def _orchestrator(detections: list[Detection], with_reader=True, with_color=True):
     detector = MagicMock()
-    detector.detect.return_value = detections
+    detector.detect_image.return_value = detections
     reader = MagicMock()
     reader.read.return_value = BibReading(
         digits="20", confidence=0.95, confidence_per_digit=[0.95, 0.95], status="read"
@@ -49,6 +53,8 @@ def _orchestrator(detections: list[Detection], with_reader=True, with_color=True
         bib_reader=reader if with_reader else None,
         color_strategy=strategy if with_color else None,
         confidence_threshold=0.0,
+        decode_scale=1,
+        detect_input="pil",
     )
 
 

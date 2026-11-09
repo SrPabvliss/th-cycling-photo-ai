@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
 from PIL import Image, ImageOps
 
 from cycling_photo_ai.detection.inference.ports import Detection
@@ -62,6 +63,9 @@ class RfdetrDetector:
         weights_path: str | None = None,
         keep_all_classes: bool = False,
         legacy_6class: bool = False,
+        variant: str | None = None,
+        resolution: int | None = None,
+        class_names: list[str] | None = None,
     ) -> None:
         """
         Args:
@@ -86,31 +90,95 @@ class RfdetrDetector:
             "RFDETR_WEIGHTS", str(default_weights)
         )
         self._keep_all_classes = keep_all_classes
+        # ESWA evaluation (P-82): variant, resolution and class list of the
+        # selected checkpoint. RFDETR_CLASSES="competidor_number" for the
+        # single-class `_fx` runs of the selection study.
+        self._variant = variant or os.environ.get("RFDETR_VARIANT", "medium")
+        self._resolution = resolution or (int(os.environ.get("RFDETR_RES", "0")) or None)
+        if class_names:
+            self._class_names = list(class_names)
+        elif os.environ.get("RFDETR_CLASSES"):
+            self._class_names = [c.strip() for c in os.environ["RFDETR_CLASSES"].split(",") if c.strip()]
         self._model = None
+        # Timing of the last detect_image call (model forward only), see YoloDetector.
+        self.last_timing: dict[str, float] = {}
+        self._forward_t0 = 0.0
 
     def _load(self) -> None:
-        from rfdetr import RFDETRMedium
+        import rfdetr
 
+        cls = {"nano": "RFDETRNano", "small": "RFDETRSmall", "medium": "RFDETRMedium", "large": "RFDETRLarge"}[self._variant]
+        kwargs = dict(pretrain_weights=self._weights_path, num_classes=len(self._class_names))
+        if self._resolution:
+            kwargs["resolution"] = self._resolution
         # num_classes determined by class list; rfdetr accepts either based on
         # checkpoint shape, but pass it explicitly for safety.
-        self._model = RFDETRMedium(
-            pretrain_weights=self._weights_path,
-            num_classes=len(self._class_names),
-        )
+        self._model = getattr(rfdetr, cls)(**kwargs)
+        self._install_timing_hooks()
+
+    def _install_timing_hooks(self) -> None:
+        """Measure the forward of the inner network (RFDETR -> Model -> nn.Module)
+        with cuda synchronization; predict() keeps doing the preprocessing."""
+        import time
+
+        import torch
+
+        net = getattr(getattr(self._model, "model", None), "model", None)
+        if net is None or not hasattr(net, "register_forward_pre_hook"):
+            return
+        sync = torch.cuda.synchronize if torch.cuda.is_available() else (lambda: None)
+
+        def pre(_m, _inp):
+            sync()
+            self._forward_t0 = time.perf_counter()
+
+        def post(_m, _inp, _out):
+            sync()
+            self.last_timing = {"model_ms": (time.perf_counter() - self._forward_t0) * 1000}
+
+        net.register_forward_pre_hook(pre)
+        net.register_forward_hook(post)
 
     def detect(self, image_path: str) -> list[Detection]:
-        if self._model is None:
-            self._load()
-
         # Respect EXIF orientation (Sony A7S III + others store rotation tag).
         # Without exif_transpose, vertical photos arrive sideways and detector
         # accuracy collapses (discovered ADR-016 eval, 2026-05-02).
         image = Image.open(image_path)
         image = ImageOps.exif_transpose(image).convert("RGB")
+        return self.detect_image(image)
+
+    def detect_image(self, image: Image.Image, conf: float | None = None) -> list[Detection]:
+        """Detect on a decoded, EXIF-corrected RGB image.
+
+        `conf` is accepted for parity with YoloDetector and ignored: every
+        query is returned (threshold=0.0) and the caller filters.
+        """
+        if self._model is None:
+            self._load()
+
         img_w, img_h = image.size
 
         # predict() returns sv.Detections with xyxy (pixel), confidence, class_id
         sv_dets = self._model.predict(image, threshold=0.0)
+        return self._to_detections(sv_dets, img_w, img_h)
+
+    def detect_array(self, image: "np.ndarray", conf: float | None = None) -> list[Detection]:
+        """Detect on a decoded BGR uint8 array (H, W, 3). The pixels go to the
+        GPU as uint8 and are converted there; rfdetr's predict() otherwise
+        converts the full photo to float on the CPU and uploads it (P-112).
+        Normalization and the resize to the network input stay rfdetr's own."""
+        if self._model is None:
+            self._load()
+        import torch
+
+        img_h, img_w = image.shape[:2]
+        device = self._model.model.device
+        t = torch.from_numpy(np.ascontiguousarray(image)).to(device, non_blocking=True)
+        t = t[..., [2, 1, 0]].permute(2, 0, 1).float().div_(255.0)  # BGR uint8 -> RGB float [0, 1]
+        sv_dets = self._model.predict(t, threshold=0.0)
+        return self._to_detections(sv_dets, img_w, img_h)
+
+    def _to_detections(self, sv_dets, img_w: int, img_h: int) -> list[Detection]:
         detections: list[Detection] = []
 
         for i in range(len(sv_dets)):

@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 import requests
+from PIL import Image
 
 from cycling_photo_ai.pipeline.orchestrator import _upload_crop
 
@@ -101,6 +102,8 @@ def _build_orchestrator(detector, reader, strategy):
         bib_reader=reader,
         color_strategy=strategy,
         confidence_threshold=0.0,
+        decode_scale=1,
+        detect_input="pil",
     )
 
 
@@ -132,8 +135,12 @@ def fake_image():
 @pytest.fixture
 def patched_image(fake_image, monkeypatch):
     monkeypatch.setattr(
-        "cycling_photo_ai.pipeline.orchestrator.cv2.imread",
-        lambda _: fake_image,
+        "cycling_photo_ai.pipeline.orchestrator._load_image",
+        lambda _path, _scale=1: (
+            Image.fromarray(fake_image[:, :, ::-1].copy()),
+            fake_image,
+            (fake_image.shape[1], fake_image.shape[0]),
+        ),
     )
     return fake_image
 
@@ -142,7 +149,7 @@ def test_orchestrator_attaches_crop_path_to_bibs_when_urls_provided(
     patched_image, monkeypatch
 ):
     detector = MagicMock()
-    detector.detect.return_value = [_make_detection("competidor_number")]
+    detector.detect_image.return_value = [_make_detection("competidor_number")]
     reader = MagicMock()
     reader.read.return_value = BibReading(
         digits="20",
@@ -173,7 +180,7 @@ def test_orchestrator_attaches_crop_path_to_colors_per_region(
     patched_image, monkeypatch
 ):
     detector = MagicMock()
-    detector.detect.return_value = [
+    detector.detect_image.return_value = [
         _make_detection("helmet"),
         _make_detection("cyclist_clothes"),
         _make_detection("bicycle"),
@@ -211,7 +218,7 @@ def test_orchestrator_emits_crop_upload_disabled_when_no_urls(
     patched_image, monkeypatch
 ):
     detector = MagicMock()
-    detector.detect.return_value = [_make_detection("competidor_number")]
+    detector.detect_image.return_value = [_make_detection("competidor_number")]
     reader = MagicMock()
     reader.read.return_value = BibReading(
         digits="20",
@@ -233,7 +240,7 @@ def test_orchestrator_emits_crop_upload_failed_for_failed_put(
     patched_image, monkeypatch
 ):
     detector = MagicMock()
-    detector.detect.return_value = [_make_detection("competidor_number")]
+    detector.detect_image.return_value = [_make_detection("competidor_number")]
     reader = MagicMock()
     reader.read.return_value = BibReading(
         digits="20",
@@ -264,7 +271,7 @@ def test_orchestrator_emits_crop_upload_overflow_for_bibs(
     patched_image, monkeypatch
 ):
     detector = MagicMock()
-    detector.detect.return_value = [
+    detector.detect_image.return_value = [
         _make_detection("competidor_number") for _ in range(3)
     ]
     reader = MagicMock()
@@ -300,7 +307,7 @@ def test_orchestrator_emits_crop_upload_overflow_for_color_region(
     patched_image, monkeypatch
 ):
     detector = MagicMock()
-    detector.detect.return_value = [_make_detection("helmet") for _ in range(2)]
+    detector.detect_image.return_value = [_make_detection("helmet") for _ in range(2)]
     color_strategy = MagicMock()
     color_strategy.analyze.return_value = _make_color_result()
     monkeypatch.setattr(
