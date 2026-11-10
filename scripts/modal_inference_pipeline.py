@@ -1,4 +1,20 @@
-"""TIT-8 spike: Modal GPU inference endpoint para cycling-photo pipeline.
+"""ROLLBACK de TIT-101: YOLO11m + PARSeq (v4, commit 43726ee) con GPU A10G y respaldo L4.
+
+Rama `rollback/TIT-101-v4`. Es la v4 que estuvo en produccion hasta TIT-101, con tres cambios:
+el medidor de telemetria segun la GPU (A10G/A10 -> gpu.a10g.container_seconds,
+L4 -> gpu.container_seconds), y gpu=["A10G", "L4"] para no depender de la capacidad de L4.
+El back del legacy no cambia: deja de mandar detector/ocr y esta app usa yolo/parseq por defecto.
+
+Uso (desde un worktree de esta rama; el venv apunta al repo principal, por eso PYTHONPATH):
+  git worktree add <dir> rollback/TIT-101-v4
+  cd <dir> && PYTHONPATH=<dir>/src MODAL_PROFILE=pablomartinvillacres \
+    MODAL_APP_NAME=cycling-photo-ai-inference YUPANA_TELEMETRY_SECRET=<secret de prod> \
+    modal deploy scripts/modal_inference_pipeline.py
+  Despues: parar los contenedores vivos (`modal container list` / `modal container stop -y <id>`),
+  porque siguen sirviendo la version anterior, y reclasificar las fotos fallidas desde el admin.
+
+--- Docstring original de v4 ---
+TIT-8 spike: Modal GPU inference endpoint para cycling-photo pipeline.
 
 Reusa el FastAPI `app` existente (cycling_photo_ai.pipeline.app:app) via @modal.asgi_app
 para garantizar mismo schema/comportamiento que el pipeline local.
@@ -123,7 +139,7 @@ volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=False)
 
 
 @app.function(
-    gpu="L4",
+    gpu=["A10G", "L4"],
     volumes={"/vol": volume},
     scaledown_window=300,
     max_containers=10,
