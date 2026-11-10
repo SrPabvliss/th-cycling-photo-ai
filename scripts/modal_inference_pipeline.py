@@ -132,7 +132,7 @@ volume = modal.Volume.from_name("cycling-photo-ai-vol", create_if_missing=False)
 
 
 @app.function(
-    gpu="L4",
+    gpu=["A10G", "L4"],
     cpu=4.0,
     memory=8192,
     volumes={"/vol": volume},
