@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import re
 
-L4_DEVICE = "NVIDIA L4"
-A10G_DEVICE = "NVIDIA A10G"
 L4_METER = "gpu.container_seconds"
 UNKNOWN_SLUG = "unknown"
+METERS_BY_DEVICE = {
+    "NVIDIA L4": L4_METER,
+    "NVIDIA A10G": "gpu.a10g.container_seconds",
+    "NVIDIA A10": "gpu.a10g.container_seconds",
+}
 
 
 def meter_for_device(device_name: str | None) -> str:
-    if device_name == L4_DEVICE:
-        return L4_METER
-    if device_name == A10G_DEVICE:
-        return "gpu.a10g.container_seconds"
+    if device_name in METERS_BY_DEVICE:
+        return METERS_BY_DEVICE[device_name]
     return f"gpu.{_slug(device_name)}.container_seconds"
 
 
