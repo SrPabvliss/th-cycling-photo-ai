@@ -11,6 +11,7 @@ from cycling_photo_ai.telemetry.recorder import (
 )
 
 T0 = datetime(2026, 11, 1, 20, 0, 0, tzinfo=UTC)
+METER = "gpu.a10g.container_seconds"
 
 
 class FakeClock:
@@ -34,8 +35,16 @@ class FakeSink:
         return self.results.pop(0) if self.results else "delivered"
 
 
+def _resolver() -> tuple[str, str | None]:
+    return METER, "NVIDIA A10G"
+
+
+def _exploding_resolver() -> tuple[str, str | None]:
+    raise AssertionError("resolver must not be called")
+
+
 def _recorder(sink: FakeSink, clock: FakeClock) -> TelemetryRecorder:
-    return TelemetryRecorder(sink, "ta-1", clock=clock)
+    return TelemetryRecorder(sink, "ta-1", METER, clock=clock)
 
 
 def _sent(sink: FakeSink) -> list[dict]:
@@ -151,7 +160,7 @@ def test_sink_failure_is_swallowed():
         def send(self, reports: list[dict]) -> str:
             raise RuntimeError("boom")
 
-    recorder = TelemetryRecorder(ExplodingSink(), "ta-1", clock=FakeClock())
+    recorder = TelemetryRecorder(ExplodingSink(), "ta-1", METER, clock=FakeClock())
     recorder.request_finished(recorder.request_started("fc-A"))
 
     recorder.flush_tick()
@@ -165,7 +174,7 @@ def test_record_never_blocks_when_sink_hangs():
             release.wait(30)
             return "delivered"
 
-    recorder = TelemetryRecorder(HangingSink(), "ta-1", flush_s=0.01, heartbeat_s=0.01)
+    recorder = TelemetryRecorder(HangingSink(), "ta-1", METER, flush_s=0.01, heartbeat_s=0.01)
     recorder.start()
     try:
         started = time.monotonic()
@@ -187,8 +196,39 @@ def test_recorder_is_null_without_configuration():
         "MODAL_TASK_ID": "ta-1",
     }
 
-    assert isinstance(recorder_from_env(full), TelemetryRecorder)
-    assert isinstance(recorder_from_env({}), NullTelemetryRecorder)
+    assert isinstance(recorder_from_env(full, _resolver), TelemetryRecorder)
+    assert isinstance(recorder_from_env({}, _exploding_resolver), NullTelemetryRecorder)
     for missing in full:
         partial = {k: v for k, v in full.items() if k != missing}
-        assert isinstance(recorder_from_env(partial), NullTelemetryRecorder)
+        assert isinstance(recorder_from_env(partial, _exploding_resolver), NullTelemetryRecorder)
+
+
+def test_recorder_from_env_uses_resolved_meter():
+    full = {
+        "YUPANA_BASE_URL": "https://yupana.test",
+        "YUPANA_API_KEY": "k",
+        "MODAL_TASK_ID": "ta-1",
+    }
+
+    recorder = recorder_from_env(full, _resolver)
+
+    assert isinstance(recorder, TelemetryRecorder)
+    recorder.record_boot(T0, T0)
+    assert recorder._buffer.take(10)[0]["payload"]["meter"] == METER
+
+
+def test_all_activities_carry_the_meter():
+    sink, clock = FakeSink(), FakeClock()
+    recorder = _recorder(sink, clock)
+
+    token = recorder.request_started("fc-A")
+    recorder.heartbeat_tick()
+    recorder.record_stage("ocr", "fc-A", T0, T0)
+    recorder.record_boot(T0, T0)
+    recorder.request_finished(token)
+    recorder.flush_tick()
+
+    sent = _sent(sink)
+    assert {r["payload"]["activity"] for r in sent} == {"request", "heartbeat", "stage"}
+    assert len(sent) == 4
+    assert all(r["payload"]["meter"] == METER for r in sent)

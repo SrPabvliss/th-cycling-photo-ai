@@ -143,6 +143,8 @@ class PARSeqReader:
         return BibReading(
             digits=digits,
             confidence=overall_conf,
+            # Already min over digit steps, uncalibrated: same value by definition.
+            confidence_uncalibrated=overall_conf,
             confidence_per_digit=per_digit,
             status=status,
             rejection_reason=rejection_reason,

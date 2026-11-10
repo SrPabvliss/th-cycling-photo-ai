@@ -8,14 +8,16 @@ Endpoints:
 
 Detector / OCR selection per-request via query string (?detector=...&ocr=...)
 or via env defaults:
-  DETECTOR_TYPE  in {yolo (default), rfdetr_v3, rfdetr_legacy}
-  OCR_TYPE       in {parseq (default), trocr}
+  DETECTOR_TYPE  in {yolo (default), rfdetr_v3, rfdetr_legacy, rfdetr_l_896}
+  OCR_TYPE       in {parseq (default), trocr, svtrv2_b}
 """
 
 from __future__ import annotations
 
+import itertools
 import os
 import tempfile
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,6 +41,7 @@ from cycling_photo_ai.pipeline.schemas import (
     StageTimings,
 )
 from cycling_photo_ai.telemetry.asgi_middleware import AttributionMiddleware, current_call_id
+from cycling_photo_ai.telemetry.gpu_meter import detect_gpu_meter
 from cycling_photo_ai.telemetry.recorder import recorder_from_env
 
 # Caches: detectors / readers / color strategies keyed by type → instance (lazy)
@@ -54,11 +57,18 @@ DEFAULT_OCR = os.environ.get("OCR_TYPE", "parseq")
 # academic reference only; not exposed as a runtime option.
 DEFAULT_COLOR = os.environ.get("COLOR_STRATEGY_TYPE", "gemini")
 
-AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy")
-AVAILABLE_OCRS = ("parseq", "trocr")
+DEFAULT_MAX_BIBS = int(os.environ["MAX_BIBS"]) if os.environ.get("MAX_BIBS") else None
+if DEFAULT_MAX_BIBS is not None and DEFAULT_MAX_BIBS < 1:
+    raise ValueError(f"MAX_BIBS must be >= 1, got {DEFAULT_MAX_BIBS}")
+
+AVAILABLE_DETECTORS = ("yolo", "rfdetr_v3", "rfdetr_legacy", "rfdetr_l_896")
+AVAILABLE_OCRS = ("parseq", "trocr", "svtrv2_b")
 AVAILABLE_COLORS = ("gemini", "none")
 
 telemetry_recorder = recorder_from_env()
+
+CONTAINER_ID = uuid.uuid4().hex[:12]
+_request_counters: dict[tuple[str, str], itertools.count] = {}
 
 
 def _process_started_at() -> datetime:
@@ -99,6 +109,13 @@ async def lifespan(app: FastAPI):
         color._load()
     print(f"[lifespan] Color ready: {DEFAULT_COLOR}", flush=True)
 
+    if os.environ.get("WARMUP_INFERENCE", "0") == "1":
+        _run_warmup_inference(detector, reader, _get_orchestrator(DEFAULT_DETECTOR, DEFAULT_OCR, DEFAULT_COLOR))
+        print("[lifespan] Warm-up inference done.", flush=True)
+
+    meter, device_name = detect_gpu_meter()
+    print(f"[lifespan] GPU meter: {meter} (device: {device_name})", flush=True)
+
     print("[lifespan] All models warm.", flush=True)
     telemetry_recorder.record_boot(boot_started_at, datetime.now(UTC))
 
@@ -119,6 +136,19 @@ app = FastAPI(
 app.add_middleware(AttributionMiddleware, recorder=telemetry_recorder)
 
 
+def _run_warmup_inference(detector: IDetector, reader: IBibReader, orch: Any) -> None:
+    import numpy as np
+    from PIL import Image
+
+    rng = np.random.default_rng(0)
+    noise = rng.integers(0, 255, size=(1280, 1920, 3), dtype=np.uint8)
+    if orch.detect_input == "array" and hasattr(detector, "detect_array"):
+        detector.detect_array(noise)
+    elif hasattr(detector, "detect_image"):
+        detector.detect_image(Image.fromarray(noise))
+    reader.read(rng.integers(0, 255, size=(96, 240, 3), dtype=np.uint8))
+
+
 def _get_detector(detector_type: str = DEFAULT_DETECTOR) -> IDetector:
     """Lazy-load detector by type. Mini-app uses this to swap detectors."""
     if detector_type in _detectors:
@@ -133,6 +163,17 @@ def _get_detector(detector_type: str = DEFAULT_DETECTOR) -> IDetector:
     elif detector_type == "rfdetr_legacy":
         from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
         det = RfdetrDetector(legacy_6class=True)
+    elif detector_type == "rfdetr_l_896":
+        from cycling_photo_ai.detection.inference.rfdetr_detector import RfdetrDetector
+        det = RfdetrDetector(
+            weights_path=os.environ.get(
+                "RFDETR_L_896_WEIGHTS",
+                "/vol/weights/rfdetr_large_896_s42_fx/checkpoint_best_ema.pth",
+            ),
+            variant="large",
+            resolution=896,
+            class_names=["competidor_number"],
+        )
     else:
         raise ValueError(
             f"Unknown detector_type={detector_type!r}. "
@@ -154,6 +195,11 @@ def _get_bib_reader(reader_type: str = DEFAULT_OCR) -> IBibReader:
     elif reader_type == "trocr":
         from cycling_photo_ai.ocr.inference.trocr_reader import TrOCRBibReader
         rd = TrOCRBibReader()
+    elif reader_type == "svtrv2_b":
+        from cycling_photo_ai.ocr.inference.svtrv2_reader import SVTRv2Reader
+        rd = SVTRv2Reader(
+            weights_dir=os.environ.get("SVTRV2_WEIGHTS", "/vol/weights/svtrv2_base_syn2_s42")
+        )
     else:
         raise ValueError(
             f"Unknown reader_type={reader_type!r}. "
@@ -201,6 +247,19 @@ def _get_orchestrator(detector_type: str, reader_type: str, color_type: str = "n
     return orch
 
 
+def _runtime_info(request_seq: int) -> dict[str, str | int]:
+    import torch
+
+    _, device_name = detect_gpu_meter()
+    cuda = torch.cuda.is_available()
+    return {
+        "container_id": os.environ.get("MODAL_TASK_ID", CONTAINER_ID),
+        "request_seq": request_seq,
+        "gpu": device_name or "none",
+        "gpu_mem_peak_mb": int(torch.cuda.max_memory_allocated() // 2**20) if cuda else 0,
+    }
+
+
 async def _resolve_image(image_url: str) -> str:
     """If image_url is an HTTP(S) URL, download to temp file and return path."""
     if not image_url.startswith(("http://", "https://")):
@@ -226,15 +285,27 @@ async def pipeline(
         default=DEFAULT_COLOR,
         description="Color strategy backend (gemini | none)",
     ),
+    ocr_threshold: float | None = Query(
+        default=None, ge=0, le=1, description="OCR abstention threshold override"
+    ),
+    max_bibs: int | None = Query(
+        default=DEFAULT_MAX_BIBS,
+        ge=1,
+        description="Cap on competidor_number boxes sent to OCR, highest confidence first.",
+    ),
 ) -> Any:
     """Full detection→crop→{OCR, color} pipeline. Backends selectable via query."""
     orch = _get_orchestrator(detector, ocr, color)
+    request_seq = next(_request_counters.setdefault((detector, ocr), itertools.count(1)))
 
     image_path = await _resolve_image(request.image_url)
     try:
         result = orch.process(
             image_path=image_path,
             crop_upload_urls=request.crop_upload_urls,
+            confidence_threshold=request.confidence_threshold,
+            ocr_threshold=ocr_threshold,
+            max_bibs=max_bibs,
             stage_observer=_record_stage,
         )
     finally:
@@ -251,12 +322,22 @@ async def pipeline(
         processing_ms=result.processing_ms,
         timings=StageTimings(
             total_ms=result.processing_ms,
+            decode_ms=result.decode_ms,
             detection_ms=result.detection_ms,
+            detection_model_ms=result.detection_model_ms,
             ocr_ms=result.ocr_ms,
             color_ms=result.color_ms,
         ),
         stage_results=[StageResult(**sr) for sr in result.stage_results],
         model_versions={"detection": detector, "ocr": ocr, "color": color},
+        runtime=_runtime_info(request_seq),
+        params={
+            "confidence_threshold": request.confidence_threshold,
+            "ocr_threshold": ocr_threshold,
+            "max_bibs": max_bibs,
+            "decode_scale": orch.decode_scale,
+            "detect_input": orch.detect_input,
+        },
     )
 
 
